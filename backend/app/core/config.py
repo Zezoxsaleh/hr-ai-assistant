@@ -13,6 +13,10 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://hr_ai_assistant:hr_ai_assistant@localhost:5432/hr_ai_assistant",
         validation_alias="DATABASE_URL",
     )
+    test_database_url: str = Field(
+        default="postgresql+psycopg://hr_ai_assistant:hr_ai_assistant@localhost:5432/hr_ai_assistant_test",
+        validation_alias="TEST_DATABASE_URL",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
