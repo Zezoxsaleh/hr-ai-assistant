@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Candidate, Job, JobApplication, Organization, Resume, User
+from app.services.errors import ValidationError
 from app.services.job_application_validation import validate_job_application_consistency
 
 
@@ -292,7 +293,7 @@ def test_job_application_organization_consistency_validation(db_session: Session
         resume=resume,
     )
 
-    with pytest.raises(ValueError, match="Job must belong"):
+    with pytest.raises(ValidationError, match="Job must belong"):
         validate_job_application_consistency(
             organization_id=other_organization.id,
             job=job,
@@ -307,7 +308,7 @@ def test_resume_candidate_consistency_validation(db_session: Session) -> None:
     db_session.add(other_candidate)
     db_session.flush()
 
-    with pytest.raises(ValueError, match="Resume must belong"):
+    with pytest.raises(ValidationError, match="Resume must belong"):
         validate_job_application_consistency(
             organization_id=organization.id,
             job=job,
