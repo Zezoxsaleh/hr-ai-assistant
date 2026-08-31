@@ -54,3 +54,17 @@ pytest
 ruff check .
 ruff format --check .
 ```
+
+## Migrations
+
+From `backend/`, apply migrations after PostgreSQL is running:
+
+```bash
+alembic upgrade head
+```
+
+Downgrade the latest migration:
+
+```bash
+alembic downgrade -1
+```
