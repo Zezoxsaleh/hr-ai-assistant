@@ -1,0 +1,297 @@
+import uuid
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.ai.providers.errors import (
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
+from app.ai.providers.fake import FakeAIProvider
+from app.ai.workflows import JobProfileExtractionWorkflow
+from app.models import AITrace, Job, JobProfile, Organization, User, WorkflowRun, WorkflowStepTrace
+from app.services.errors import ValidationError
+from app.services.job_profile_service import JobProfileService
+
+
+def create_organization(db_session: Session) -> Organization:
+    organization = Organization(name="Job Profile Workflow Org")
+    db_session.add(organization)
+    db_session.flush()
+    return organization
+
+
+def create_user(db_session: Session, organization: Organization) -> User:
+    user = User(
+        organization_id=organization.id,
+        email="job-profile-flow@example.com",
+        full_name="Job Profile Flow",
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def create_job(
+    db_session: Session,
+    organization: Organization,
+    *,
+    raw_description: str | None = "Build data pipelines with Python.",
+) -> Job:
+    job = Job(
+        organization_id=organization.id,
+        title="Data Engineer",
+        raw_description=raw_description,
+    )
+    db_session.add(job)
+    db_session.flush()
+    return job
+
+
+def valid_payload() -> dict:
+    return {"title": "Data Engineer", "summary": "Builds pipelines", "requirements": ["Python"]}
+
+
+def make_workflow(
+    *,
+    payload: dict | None = None,
+    failure: ProviderTimeoutError | ProviderRateLimitError | None = None,
+) -> tuple[JobProfileExtractionWorkflow, FakeAIProvider]:
+    provider = FakeAIProvider(
+        provider="fake",
+        model="fake-model",
+        structured_payload=payload if payload is not None else valid_payload(),
+        token_usage={"input_tokens": 10, "output_tokens": 5},
+        latency_ms=120,
+        failure=failure,
+    )
+    return JobProfileExtractionWorkflow(provider), provider
+
+
+def count_rows(db_session: Session, model) -> int:
+    return db_session.scalar(select(func.count()).select_from(model))
+
+
+def only_one(db_session: Session, model):
+    return db_session.scalar(select(model).limit(1))
+
+
+def test_success_creates_profile_and_traces(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    profile = db_session.get(JobProfile, result.profile_id)
+    run = db_session.get(WorkflowRun, result.workflow_run_id)
+    step = db_session.get(WorkflowStepTrace, result.workflow_step_trace_id)
+    trace = db_session.get(AITrace, result.ai_trace_id)
+
+    assert result.version_number == 1
+    assert profile.status == "draft"
+    assert profile.source == "ai_extracted"
+    assert profile.is_current is True
+    assert profile.profile_data == {"schema_version": "1.0", **valid_payload()}
+    assert profile.provenance == {
+        "workflow": "job_profile_extraction",
+        "provider": "fake",
+        "model": "fake-model",
+    }
+    assert profile.raw_input_snapshot == {
+        "entity": "job",
+        "entity_id": str(job.id),
+        "raw_description_sha256": trace.input_reference["raw_description_sha256"],
+    }
+    assert run.status == "completed"
+    assert step.status == "completed"
+    assert trace.status == "succeeded"
+    assert trace.provider == "fake"
+    assert trace.model_name == "fake-model"
+    assert trace.input_reference == {
+        "entity": "job",
+        "entity_id": str(job.id),
+        "raw_description_sha256": trace.input_reference["raw_description_sha256"],
+    }
+    assert "output_sha256" in trace.output_reference
+    assert trace.token_usage == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_new_extraction_makes_version_current_when_none_approved(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    profile = db_session.get(JobProfile, result.profile_id)
+    assert profile.is_current is True
+    assert profile.status == "draft"
+
+
+def test_extraction_preserves_approved_profile(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    user = create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    db_session.commit()
+
+    profile_service = JobProfileService()
+    draft = profile_service.create_version(
+        db_session,
+        job_id=job.id,
+        status="draft",
+        source="hr_edited",
+        profile_data={"title": "Approved Title"},
+        raw_input_snapshot=None,
+        provenance=None,
+        organization_id=organization.id,
+        make_current=True,
+    )
+    profile_service.approve(db_session, profile_id=draft.id, approved_by_user_id=user.id)
+    approved = draft
+    db_session.commit()
+
+    workflow, _ = make_workflow()
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    new_profile = db_session.get(JobProfile, result.profile_id)
+    db_session.refresh(approved)
+    assert approved.is_current is True
+    assert approved.profile_data == {"title": "Approved Title"}
+    assert new_profile.is_current is False
+    assert new_profile.status == "draft"
+
+
+def test_missing_raw_description_rejected_before_traces(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization, raw_description=None)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    with pytest.raises(ValidationError, match="no raw description"):
+        workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    assert count_rows(db_session, WorkflowRun) == 0
+    assert count_rows(db_session, AITrace) == 0
+
+
+def test_invalid_output_records_validation_failure(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(payload={"summary": "missing title"})
+    db_session.commit()
+
+    with pytest.raises(ValidationError):
+        workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    run = only_one(db_session, WorkflowRun)
+    step = only_one(db_session, WorkflowStepTrace)
+    trace = only_one(db_session, AITrace)
+
+    assert run.status == "failed"
+    assert step.status == "failed"
+    assert step.error_type == "ValidationError"
+    assert trace.status == "validation_failed"
+    assert trace.validation_error is not None
+    assert "message" in trace.validation_error
+
+
+def test_provider_timeout_records_failure(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(failure=ProviderTimeoutError("timed out"))
+    db_session.commit()
+
+    with pytest.raises(ProviderTimeoutError):
+        workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    run = only_one(db_session, WorkflowRun)
+    step = only_one(db_session, WorkflowStepTrace)
+    trace = only_one(db_session, AITrace)
+
+    assert run.status == "failed"
+    assert step.status == "failed"
+    assert step.error_type == "ProviderTimeoutError"
+    assert trace.status == "failed"
+
+
+def test_provider_rate_limit_records_failure(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(failure=ProviderRateLimitError("rate limited"))
+    db_session.commit()
+
+    with pytest.raises(ProviderRateLimitError):
+        workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    trace = only_one(db_session, AITrace)
+    step = only_one(db_session, WorkflowStepTrace)
+    assert trace.status == "failed"
+    assert step.status == "failed"
+
+
+def test_org_isolation_rejected(db_session: Session) -> None:
+    organization_a = create_organization(db_session)
+    organization_b = Organization(name="Other Org")
+    db_session.add(organization_b)
+    db_session.flush()
+    job_in_b = create_job(db_session, organization_b)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    with pytest.raises(ValidationError, match="different organization"):
+        workflow.run(db_session, job_id=job_in_b.id, organization_id=organization_a.id)
+    db_session.commit()
+
+    assert count_rows(db_session, WorkflowRun) == 0
+
+
+def test_missing_job_rejected(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    with pytest.raises(ValidationError, match="Job was not found"):
+        workflow.run(db_session, job_id=uuid.uuid4(), organization_id=organization.id)
+
+
+def test_only_extraction_step_recorded(db_session: Session) -> None:
+    """The workflow records only the extraction step, with no scoring decision."""
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow()
+    db_session.commit()
+
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    run = db_session.get(WorkflowRun, result.workflow_run_id)
+    assert run.workflow_type == "job_profile_extraction"
+    assert step_names(db_session, result.workflow_run_id) == ["extract_job_profile"]
+
+
+def step_names(db_session: Session, run_id: uuid.UUID) -> list[str]:
+    return list(
+        db_session.scalars(
+            select(WorkflowStepTrace.step_name)
+            .where(WorkflowStepTrace.workflow_run_id == run_id)
+            .order_by(WorkflowStepTrace.step_name)
+        )
+    )

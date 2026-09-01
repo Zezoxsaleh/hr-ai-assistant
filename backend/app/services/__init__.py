@@ -6,6 +6,7 @@ SQLAlchemy Session; they add/flush/query but never commit.
 """
 
 from app.services.candidate_profile_service import CandidateProfileService
+from app.services.decision_service import VALID_DECISIONS, DecisionService
 from app.services.errors import (
     ApplicationError,
     InvalidStateError,
@@ -15,16 +16,26 @@ from app.services.errors import (
 )
 from app.services.evaluation_service import EvaluationService
 from app.services.job_profile_service import JobProfileService
+from app.services.observability_service import (
+    AIFailureSummary,
+    ObservabilityService,
+    WorkflowRunSummary,
+)
 from app.services.workflow_trace_service import WorkflowTraceService
 
 __all__ = [
+    "AIFailureSummary",
     "ApplicationError",
     "CandidateProfileService",
+    "DecisionService",
     "EvaluationService",
     "InvalidStateError",
     "JobProfileService",
     "NotFoundError",
+    "ObservabilityService",
+    "VALID_DECISIONS",
     "ValidationError",
     "VersionConflictError",
+    "WorkflowRunSummary",
     "WorkflowTraceService",
 ]
