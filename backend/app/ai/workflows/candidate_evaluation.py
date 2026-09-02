@@ -10,10 +10,12 @@ workflow/step/AI traces.
 
 This workflow produces evidence and explanation for HR review only. It never
 creates an HRDecision, never recommends hire/reject/advance, and never lets the
-LLM produce a score (no approved scoring formula exists; the score is left
-nullable). Only the provider-agnostic ``AIProvider`` interface is consumed; real
-provider adapters, LangChain/LangGraph/agents, scoring, and workers are out of
-scope. The workflow never commits; the caller owns the transaction.
+LLM produce a score. A score is derived deterministically by the
+``ScoringService`` (Phase 4.2) from the persisted match evidence and the
+approved job-profile requirements. Only the provider-agnostic ``AIProvider``
+interface is consumed; real provider adapters, LangChain/LangGraph/agents, and
+workers are out of scope. The workflow never commits; the caller owns the
+transaction.
 """
 
 from __future__ import annotations
@@ -28,9 +30,10 @@ from sqlalchemy.orm import Session
 from app.ai.contracts import (
     AI_CONTRACT_SCHEMA_VERSION,
     EvaluationExplanationOutput,
-    MatchEvidenceOutput,
+    MatchEvidenceListOutput,
+    normalize_job_profile_requirements,
     validate_evaluation_explanation,
-    validate_match_evidence,
+    validate_match_evidence_list,
 )
 from app.ai.providers.base import AIProvider, StructuredGenerationRequest
 from app.ai.providers.errors import ProviderError
@@ -39,6 +42,7 @@ from app.services.candidate_profile_service import CandidateProfileService
 from app.services.errors import NotFoundError, ValidationError
 from app.services.evaluation_service import EvaluationService
 from app.services.job_profile_service import JobProfileService
+from app.services.scoring_service import ScoringService, build_evidence_by_key
 from app.services.workflow_trace_service import WorkflowTraceService
 
 WORKFLOW_TYPE = "candidate_evaluation"
@@ -95,6 +99,7 @@ class CandidateEvaluationWorkflow:
         self._evaluation_service = evaluation_service or EvaluationService()
         self._job_profile_service = job_profile_service or JobProfileService()
         self._candidate_profile_service = candidate_profile_service or CandidateProfileService()
+        self._scoring_service = ScoringService()
 
     def run(
         self,
@@ -131,6 +136,10 @@ class CandidateEvaluationWorkflow:
             status="running",
         )
         input_reference = self._input_reference(application, job_profile, candidate_profile)
+        requirements = normalize_job_profile_requirements(
+            job_profile.profile_data.get("requirements")
+        )
+        allowed_keys = {requirement.key for requirement in requirements}
 
         evidence, _evidence_result, evidence_trace = self._run_ai_component(
             db,
@@ -138,9 +147,15 @@ class CandidateEvaluationWorkflow:
             run=run,
             provider=self._evidence_provider,
             component_name=EVIDENCE_AI_COMPONENT,
-            input_text=self._evidence_input(application, job_profile, candidate_profile),
-            output_schema=MatchEvidenceOutput,
-            validate_fn=validate_match_evidence,
+            input_text=self._evidence_input(
+                application,
+                job_profile,
+                candidate_profile,
+                requirements,
+            ),
+            output_schema=MatchEvidenceListOutput,
+            validate_fn=validate_match_evidence_list,
+            validate_kwargs={"allowed_keys": allowed_keys},
             input_reference=input_reference,
         )
         explanation, explanation_result, explanation_trace = self._run_ai_component(
@@ -149,12 +164,16 @@ class CandidateEvaluationWorkflow:
             run=run,
             provider=self._explanation_provider,
             component_name=EXPLANATION_AI_COMPONENT,
-            input_text=self._explanation_input(evidence, job_profile, candidate_profile),
+            input_text=self._explanation_input(evidence, requirements, candidate_profile),
             output_schema=EvaluationExplanationOutput,
             validate_fn=validate_evaluation_explanation,
             input_reference=input_reference,
         )
 
+        score_result = self._scoring_service.compute(
+            requirements,
+            build_evidence_by_key(evidence.evidence_items),
+        )
         evaluation = self._evaluation_service.create_version(
             db,
             job_application_id=application.id,
@@ -162,6 +181,9 @@ class CandidateEvaluationWorkflow:
             candidate_profile_id=candidate_profile.id,
             status="completed",
             explanation=explanation.model_dump(),
+            score=score_result["score"],
+            score_breakdown=score_result["breakdown"],
+            scoring_version=score_result["scoring_version"],
             provenance={
                 "workflow": WORKFLOW_TYPE,
                 "provider": explanation_result.provider,
@@ -171,23 +193,26 @@ class CandidateEvaluationWorkflow:
             organization_id=resolved_org_id,
             make_current=True,
         )
-        match_evidence = self._evaluation_service.add_match_evidence(
-            db,
-            candidate_evaluation_id=evaluation.id,
-            evidence_type=evidence.evidence_type,
-            requirement_ref=evidence.requirement_ref,
-            candidate_evidence=evidence.candidate_evidence,
-            strength=evidence.strength,
-            provenance=evidence.provenance,
-            organization_id=resolved_org_id,
-        )
+        persisted = []
+        for item in evidence.evidence_items:
+            evidence_row = self._evaluation_service.add_match_evidence(
+                db,
+                candidate_evaluation_id=evaluation.id,
+                evidence_type=item.evidence_type,
+                requirement_ref=item.requirement_ref,
+                candidate_evidence=item.candidate_evidence,
+                strength=item.strength,
+                provenance=item.provenance,
+                organization_id=resolved_org_id,
+            )
+            persisted.append(evidence_row)
 
         self._trace_service.mark_step_completed(db, workflow_step_trace_id=step.id)
         self._trace_service.mark_run_completed(db, workflow_run_id=run.id)
 
         return CandidateEvaluationResult(
             evaluation_id=evaluation.id,
-            match_evidence_id=match_evidence.id,
+            match_evidence_id=persisted[0].id if persisted else evaluation.id,
             workflow_run_id=run.id,
             workflow_step_trace_id=step.id,
             evidence_ai_trace_id=evidence_trace.id,
@@ -273,25 +298,29 @@ class CandidateEvaluationWorkflow:
         application: JobApplication,
         job_profile: JobProfile,
         candidate_profile: CandidateProfile,
+        requirements: list,
     ) -> str:
         return _serialize(
             {
                 "job_title": job_profile.profile_data.get("title"),
-                "requirements": job_profile.profile_data.get("requirements", []),
+                "requirements": [
+                    {"key": requirement.key, "text": requirement.text}
+                    for requirement in requirements
+                ],
                 "candidate_skills": candidate_profile.profile_data.get("skills", []),
             }
         )
 
     @staticmethod
     def _explanation_input(
-        evidence: MatchEvidenceOutput,
-        job_profile: JobProfile,
+        evidence: MatchEvidenceListOutput,
+        requirements: list,
         candidate_profile: CandidateProfile,
     ) -> str:
         return _serialize(
             {
-                "evidence": evidence.model_dump(),
-                "requirements": job_profile.profile_data.get("requirements", []),
+                "evidence": [item.model_dump() for item in evidence.evidence_items],
+                "requirements": [requirement.text for requirement in requirements],
                 "candidate_skills": candidate_profile.profile_data.get("skills", []),
             }
         )
@@ -307,6 +336,7 @@ class CandidateEvaluationWorkflow:
         input_text: str,
         output_schema: type,
         validate_fn,
+        validate_kwargs: dict | None = None,
         input_reference: dict[str, str],
     ):
         try:
@@ -339,7 +369,7 @@ class CandidateEvaluationWorkflow:
             raise
 
         try:
-            validated = validate_fn(result.data)
+            validated = validate_fn(result.data, **(validate_kwargs or {}))
         except ValidationError as error:
             self._trace_service.record_ai_trace(
                 db,

@@ -52,6 +52,11 @@ class CandidateEvaluation(Base):
         Index("ix_candidate_evaluations_job_profile_id", "job_profile_id"),
         Index("ix_candidate_evaluations_candidate_profile_id", "candidate_profile_id"),
         Index(
+            "ix_candidate_evaluations_application_id_score",
+            "job_application_id",
+            "score",
+        ),
+        Index(
             "uq_candidate_evaluations_current_per_application",
             "job_application_id",
             unique=True,
@@ -74,6 +79,7 @@ class CandidateEvaluation(Base):
     score: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     recommendation: Mapped[str | None] = mapped_column(String(50), nullable=True)
     explanation: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    score_breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     scoring_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

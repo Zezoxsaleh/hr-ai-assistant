@@ -229,7 +229,15 @@ flowchart LR
 
 The LLM should not invent the final score.
 
-The exact scoring weights are not finalized. The scoring model should be configurable and approved before implementation.
+The scoring weights are locked for Phase 4.2 in `backend/app/services/scoring_service.py`:
+category weights `must_have=3`, `important=2`, `nice_to_have=1`; evidence values
+`matched=1.0`, `partial=0.5`, `missing=0.0`; and
+`Score = [sum(weight x evidence_value)] / [sum(weights of ALL approved requirements)] x 100`,
+normalized to 0-100 with `SCORING_VERSION = "1.0"`. A missing must-have is a
+non-penalizing review signal only: no penalty and no auto-reject. `dimension` is
+not weighted and `strength` is excluded. A per-requirement breakdown is stored
+in `candidate_evaluations.score_breakdown`. These weights may be revisited in a
+later phase with explicit approval.
 
 ## Observability
 

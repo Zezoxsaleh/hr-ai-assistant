@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.contracts import (
+    AI_CONTRACT_SCHEMA_VERSION,
     CandidateProfileExtractionOutput,
     JobProfileExtractionOutput,
     validate_candidate_profile_extraction,
@@ -141,7 +142,7 @@ def test_metadata_is_nullable_when_not_configured() -> None:
     assert result.model is None
     assert result.token_usage is None
     assert result.latency_ms is None
-    assert result.schema_version is None or result.schema_version == "1.0"
+    assert result.schema_version == AI_CONTRACT_SCHEMA_VERSION
 
 
 # --------------------------------------------------------------------------- #

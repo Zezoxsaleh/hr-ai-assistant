@@ -1,10 +1,12 @@
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import requirement_key
 from app.ai.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -68,7 +70,10 @@ def create_parent_records(
         source="hr_created",
         profile_data={
             "title": "ML Engineer",
-            "requirements": ["Python", "Machine Learning"],
+            "requirements": [
+                {"text": "Python", "category": "must_have", "dimension": "skill"},
+                {"text": "Machine Learning", "category": "important", "dimension": "skill"},
+            ],
             "skills": ["Python", "Machine Learning"],
         },
         approved_by_user_id=user.id,
@@ -89,11 +94,35 @@ def create_parent_records(
     return organization, user, application, job_profile, candidate_profile
 
 
+def valid_evidence_list_payload() -> dict:
+    return {
+        "evidence_items": [
+            {
+                "evidence_type": "matched",
+                "requirement_ref": {
+                    "requirement_key": requirement_key("Python", "must_have"),
+                    "skill": "Python",
+                },
+                "candidate_evidence": {"source": "resume", "skill": "Python"},
+                "strength": "strong",
+            },
+            {
+                "evidence_type": "matched",
+                "requirement_ref": {
+                    "requirement_key": requirement_key("Machine Learning", "important"),
+                },
+                "candidate_evidence": {"source": "resume", "skill": "Machine Learning"},
+                "strength": "strong",
+            },
+        ]
+    }
+
+
 def valid_evidence_payload() -> dict:
     return {
         "evidence_type": "matched",
-        "requirement_ref": {"skill": "Python"},
-        "candidate_evidence": {"source": "resume", "skill": "Python"},
+        "requirement_ref": {"requirement_key": requirement_key("Machine Learning", "important")},
+        "candidate_evidence": {"source": "resume", "skill": "Machine Learning"},
         "strength": "strong",
     }
 
@@ -116,7 +145,7 @@ def make_workflow(
         provider="fake",
         model="fake-evidence-model",
         structured_payload=(
-            evidence_payload if evidence_payload is not None else valid_evidence_payload()
+            evidence_payload if evidence_payload is not None else valid_evidence_list_payload()
         ),
         token_usage={"input_tokens": 10, "output_tokens": 5},
         latency_ms=120,
@@ -188,11 +217,30 @@ def test_match_evidence_persisted(db_session: Session) -> None:
     )
     db_session.commit()
 
-    evidence = db_session.get(MatchEvidence, result.match_evidence_id)
-    assert evidence.candidate_evaluation_id == result.evaluation_id
-    assert evidence.evidence_type == "matched"
-    assert evidence.candidate_evidence == {"source": "resume", "skill": "Python"}
-    assert evidence.strength == "strong"
+    evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
+    assert evaluation.score == Decimal("100")
+    assert evaluation.scoring_version == "1.0"
+    assert evaluation.score_breakdown is not None
+    assert evaluation.recommendation is None
+
+    evidence_rows = list(
+        db_session.scalars(
+            select(MatchEvidence)
+            .where(MatchEvidence.candidate_evaluation_id == result.evaluation_id)
+            .order_by(MatchEvidence.created_at)
+        )
+    )
+    assert len(evidence_rows) == 2
+    keys = {(row.evidence_type, row.requirement_ref["requirement_key"]) for row in evidence_rows}
+    assert keys == {
+        ("matched", requirement_key("Python", "must_have")),
+        ("matched", requirement_key("Machine Learning", "important")),
+    }
+    first = db_session.get(MatchEvidence, result.match_evidence_id)
+    assert first.candidate_evaluation_id == result.evaluation_id
+    assert first.evidence_type == "matched"
+    assert first.candidate_evidence == {"source": "resume", "skill": "Python"}
+    assert first.strength == "strong"
 
 
 def test_evaluation_references_exact_job_profile(db_session: Session) -> None:
@@ -687,7 +735,7 @@ def test_no_autonomous_hiring_decision(db_session: Session) -> None:
 
     evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
     assert evaluation.recommendation is None
-    assert evaluation.score is None
+    assert evaluation.score is not None
     assert count_rows(db_session, HRDecision) == 0
 
 
@@ -714,11 +762,18 @@ def test_ai_generated_score_not_used(db_session: Session) -> None:
     organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
         db_session
     )
-    # The evidence contract has no score field; extra fields are forbidden.
+    # The evidence list contract has no score field; extra fields are forbidden.
     workflow, _, _ = make_workflow(
         evidence_payload={
-            "evidence_type": "matched",
-            "score": 95,
+            "evidence_items": [
+                {
+                    "evidence_type": "matched",
+                    "requirement_ref": {
+                        "requirement_key": requirement_key("Machine Learning", "important")
+                    },
+                    "score": 95,
+                }
+            ]
         }
     )
 
@@ -733,7 +788,7 @@ def test_ai_generated_score_not_used(db_session: Session) -> None:
     assert count_rows(db_session, CandidateEvaluation) == 0
 
 
-def test_score_remains_nullable_without_scoring_config(db_session: Session) -> None:
+def test_score_is_computed_and_recorded(db_session: Session) -> None:
     organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
         db_session
     )
@@ -747,8 +802,22 @@ def test_score_remains_nullable_without_scoring_config(db_session: Session) -> N
     db_session.commit()
 
     evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
-    assert evaluation.score is None
-    assert evaluation.scoring_version is None
+    assert evaluation.score == Decimal("100")
+    assert evaluation.scoring_version == "1.0"
+    python_key = requirement_key("Python", "must_have")
+    ml_key = requirement_key("Machine Learning", "important")
+    assert evaluation.score_breakdown[python_key] == {
+        "requirement_key": python_key,
+        "text": "Python",
+        "category": "must_have",
+        "dimension": "skill",
+        "weight": "3",
+        "evidence_type": "matched",
+        "evidence_value": "1.0",
+        "contribution": "3.0",
+        "label": "must_have:Python",
+    }
+    assert evaluation.score_breakdown[ml_key]["category"] == "important"
 
 
 def test_ai_trace_does_not_contain_raw_resume_or_job_description(db_session: Session) -> None:
@@ -825,7 +894,47 @@ def test_provenance_contains_workflow_provider_model_schema(db_session: Session)
     assert evaluation.provenance["workflow"] == "candidate_evaluation"
     assert evaluation.provenance["provider"] == "fake"
     assert evaluation.provenance["model"] == "fake-explanation-model"
-    assert evaluation.provenance["schema_version"] == "1.0"
+    assert evaluation.provenance["schema_version"] == "1.1"
+
+
+def test_evaluation_reads_legacy_flat_v1_requirements(db_session: Session) -> None:
+    organization, _user, application, job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    job_profile.profile_data = {
+        "title": "ML Engineer",
+        "requirements": ["Python", "Machine Learning"],
+        "skills": ["Python", "Machine Learning"],
+    }
+    db_session.commit()
+    workflow, _, _ = make_workflow(
+        evidence_payload={
+            "evidence_items": [
+                {
+                    "evidence_type": "matched",
+                    "requirement_ref": {"requirement_key": requirement_key("Python", "important")},
+                },
+                {
+                    "evidence_type": "missing",
+                    "requirement_ref": {
+                        "requirement_key": requirement_key("Machine Learning", "important")
+                    },
+                },
+            ]
+        }
+    )
+
+    result = workflow.run(
+        db_session,
+        job_application_id=application.id,
+        organization_id=organization.id,
+    )
+    db_session.commit()
+
+    evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
+    assert evaluation.job_application_id == application.id
+    trace = db_session.get(AITrace, result.evidence_ai_trace_id)
+    assert trace.status == "succeeded"
 
 
 def test_previous_versions_remain_unchanged(db_session: Session) -> None:
@@ -856,3 +965,121 @@ def test_previous_versions_remain_unchanged(db_session: Session) -> None:
     assert first_eval.job_profile_id == _job_profile.id
     assert second_eval.job_application_id == application.id
     assert second_eval.version_number == 2
+
+
+def test_evidence_key_must_exist_in_supplied_set(db_session: Session) -> None:
+    organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    # A key that was never supplied to the AI.
+    unknown_key = requirement_key("Unknown", "must_have")
+    workflow, _, _ = make_workflow(
+        evidence_payload={
+            "evidence_items": [
+                {
+                    "evidence_type": "matched",
+                    "requirement_ref": {"requirement_key": unknown_key},
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValidationError, match="not among the requirement keys"):
+        workflow.run(
+            db_session,
+            job_application_id=application.id,
+            organization_id=organization.id,
+        )
+    db_session.commit()
+
+    assert count_rows(db_session, CandidateEvaluation) == 0
+    assert count_rows(db_session, MatchEvidence) == 0
+
+
+def test_missing_must_have_is_non_penalizing_review_signal(db_session: Session) -> None:
+    organization, user, application, _job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    job_profile = db_session.scalar(
+        select(JobProfile).where(JobProfile.job_id == application.job_id).limit(1)
+    )
+    job_profile.profile_data = {
+        "title": "ML Engineer",
+        "requirements": [
+            {"text": "Python", "category": "must_have", "dimension": "skill"},
+            {"text": "Machine Learning", "category": "important", "dimension": "skill"},
+        ],
+    }
+    db_session.commit()
+    workflow, _, _ = make_workflow(
+        evidence_payload={
+            "evidence_items": [
+                {
+                    "evidence_type": "missing",
+                    "requirement_ref": {"requirement_key": requirement_key("Python", "must_have")},
+                },
+                {
+                    "evidence_type": "matched",
+                    "requirement_ref": {
+                        "requirement_key": requirement_key("Machine Learning", "important")
+                    },
+                },
+            ]
+        }
+    )
+
+    result = workflow.run(
+        db_session,
+        job_application_id=application.id,
+        organization_id=organization.id,
+    )
+    db_session.commit()
+
+    evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
+    assert evaluation.score == Decimal("40")
+    assert evaluation.recommendation is None
+    assert evaluation.score_breakdown[requirement_key("Python", "must_have")]["weight"] == "3"
+    assert (
+        evaluation.score_breakdown[requirement_key("Python", "must_have")]["evidence_type"]
+        == "missing"
+    )
+    assert count_rows(db_session, HRDecision) == 0
+
+
+def test_reevaluation_does_not_accumulate_duplicate_evidence(db_session: Session) -> None:
+    organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    workflow, _, _ = make_workflow()
+
+    workflow.run(
+        db_session,
+        job_application_id=application.id,
+        organization_id=organization.id,
+    )
+    db_session.commit()
+    workflow.run(
+        db_session,
+        job_application_id=application.id,
+        organization_id=organization.id,
+    )
+    db_session.commit()
+
+    # Each evaluation is a distinct version; each has exactly its own evidence rows.
+    evaluations = list(
+        db_session.scalars(
+            select(CandidateEvaluation)
+            .where(CandidateEvaluation.job_application_id == application.id)
+            .order_by(CandidateEvaluation.version_number)
+        )
+    )
+    assert len(evaluations) == 2
+    for evaluation in evaluations:
+        rows = list(
+            db_session.scalars(
+                select(MatchEvidence).where(MatchEvidence.candidate_evaluation_id == evaluation.id)
+            )
+        )
+        assert len(rows) == 2
+        keys = {row.requirement_ref["requirement_key"] for row in rows}
+        assert len(keys) == 2

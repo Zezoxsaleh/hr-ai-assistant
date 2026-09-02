@@ -106,7 +106,7 @@ def test_success_creates_profile_and_traces(db_session: Session) -> None:
     assert profile.source == "ai_extracted"
     assert profile.status == "extracted"
     assert profile.is_current is True
-    assert profile.profile_data == {"schema_version": "1.0", **valid_payload()}
+    assert profile.profile_data == {"schema_version": "1.1", **valid_payload()}
     assert run.status == "completed"
     assert step.status == "completed"
     assert step.step_name == "extract_candidate_profile"
@@ -176,7 +176,7 @@ def test_provenance_contains_workflow_provider_model_schema(db_session: Session)
         "workflow": "candidate_profile_extraction",
         "provider": "fake",
         "model": "fake-model",
-        "schema_version": "1.0",
+        "schema_version": "1.1",
     }
 
 

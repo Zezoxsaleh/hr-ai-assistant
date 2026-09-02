@@ -307,3 +307,44 @@ def test_double_approval_rejected(db_session: Session) -> None:
 
     with pytest.raises(InvalidStateError, match="already approved"):
         service.approve(db_session, profile_id=draft.id, approved_by_user_id=user.id)
+
+
+def test_hr_edit_creates_new_draft_version(db_session: Session) -> None:
+    _organization, _user, job = create_job_parent_records(db_session)
+    service = JobProfileService()
+    create_profile_version(service, db_session, job, profile_data={"title": "A"})
+    db_session.commit()
+
+    hr_edit = create_profile_version(
+        service, db_session, job, source="hr_edited", profile_data={"title": "B"}
+    )
+    db_session.commit()
+
+    assert hr_edit.version_number == 2
+    assert hr_edit.status == "draft"
+    assert hr_edit.source == "hr_edited"
+    assert hr_edit.is_current is True
+
+
+def test_approved_profile_data_is_never_mutated_by_later_versions(db_session: Session) -> None:
+    _organization, user, job = create_job_parent_records(db_session)
+    service = JobProfileService()
+    approved = create_profile_version(
+        service, db_session, job, source="hr_created", profile_data={"title": "A"}
+    )
+    service.approve(db_session, profile_id=approved.id, approved_by_user_id=user.id)
+    db_session.commit()
+
+    edited = create_profile_version(
+        service, db_session, job, source="hr_edited", profile_data={"title": "B"}
+    )
+    service.approve(db_session, profile_id=edited.id, approved_by_user_id=user.id)
+    db_session.commit()
+    db_session.refresh(approved)
+    db_session.refresh(edited)
+
+    assert approved.status == "approved"
+    assert approved.approved_at is not None
+    assert approved.profile_data == {"title": "A"}
+    assert edited.status == "approved"
+    assert edited.profile_data == {"title": "B"}

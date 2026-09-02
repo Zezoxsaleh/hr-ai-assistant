@@ -6,19 +6,119 @@ already justified by the repository so far, and stores richer detail under
 explicitly typed fields rather than a speculative nested structure.
 """
 
-from typing import Annotated
+from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+import hashlib
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.ai.contracts.schema import AI_CONTRACT_SCHEMA_VERSION, SchemaVersion
 
+RequirementCategory = Literal["must_have", "important", "nice_to_have"]
+RequirementDimension = Literal["skill", "experience", "education", "responsibility"]
+
+REQUIREMENT_CATEGORIES: tuple[RequirementCategory, ...] = (
+    "must_have",
+    "important",
+    "nice_to_have",
+)
+
+REQUIREMENT_DIMENSIONS: tuple[RequirementDimension, ...] = (
+    "skill",
+    "experience",
+    "education",
+    "responsibility",
+)
+
+
+def _normalize_text(value: str) -> str:
+    """Normalize requirement text for keying: strip and collapse whitespace."""
+    return " ".join(value.strip().split())
+
+
+def requirement_key(text: str, category: str) -> str:
+    """Deterministically derive the system-owned key for a requirement.
+
+    The key is always system-generated from the normalized text plus the
+    category; the LLM never supplies it. Requirements sharing a normalized
+    text and category always produce the same key, so duplicate keys are
+    rejected at persistence boundaries and reads stay stable across versions.
+    """
+    digest = hashlib.sha256(f"{category}\x00{_normalize_text(text)}".encode()).hexdigest()
+    return f"req-{digest[:16]}"
+
+
+class JobRequirement(BaseModel):
+    """A single structured job requirement (contract schema v1.1).
+
+    The LLM proposes only ``text``, ``category``, and ``dimension``. The
+    ``key`` is always recomputed by ``requirement_key()``; any key present in
+    the input is stripped and never trusted or persisted as supplied.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = ""
+    text: Annotated[str, Field(min_length=1)]
+    category: RequirementCategory
+    dimension: RequirementDimension
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_input(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = {name: item for name, item in value.items() if name != "key"}
+        if isinstance(payload.get("text"), str):
+            payload["text"] = _normalize_text(payload["text"])
+        return payload
+
+    @model_validator(mode="after")
+    def _assign_system_key(self) -> JobRequirement:
+        self.key = requirement_key(self.text, self.category)
+        return self
+
 
 class JobProfileExtractionOutput(BaseModel):
-    """A job profile extracted from a raw job description (schema v1.0)."""
+    """A job profile extracted from a raw job description (schema v1.1).
+
+    ``requirements`` accepts the v1.0 flat ``list[str]`` shape for read
+    compatibility or the canonical v1.1 structured ``list[JobRequirement]``
+    shape. The two shapes cannot be mixed in a single list. Flat entries are
+    normalized to structured requirements with ``category="important"`` and
+    ``dimension="skill"`` defaults; canonical entry keys are always
+    system-generated and duplicate keys are rejected.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     schema_version: SchemaVersion = AI_CONTRACT_SCHEMA_VERSION
     title: Annotated[str, Field(min_length=1)]
     summary: str | None = None
-    requirements: Annotated[list[str], Field(default_factory=list)]
+    requirements: Annotated[list[JobRequirement], Field(default_factory=list)]
+
+    @field_validator("requirements", mode="before")
+    @classmethod
+    def _coerce_requirements(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        if any(isinstance(item, str) for item in value):
+            if any(isinstance(item, dict) for item in value):
+                raise ValueError(
+                    "Job profile requirements must not mix v1.0 strings and v1.1 structures."
+                )
+            return [{"text": item, "category": "important", "dimension": "skill"} for item in value]
+        return value
+
+    @model_validator(mode="after")
+    def _reject_duplicate_requirement_keys(self) -> JobProfileExtractionOutput:
+        seen: dict[str, str] = {}
+        for requirement in self.requirements:
+            if requirement.key in seen:
+                raise ValueError(
+                    f"Duplicate requirement key {requirement.key!r} for texts "
+                    f"{seen[requirement.key]!r} and {requirement.text!r}."
+                )
+            seen[requirement.key] = requirement.text
+        return self

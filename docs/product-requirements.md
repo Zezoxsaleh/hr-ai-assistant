@@ -201,7 +201,13 @@ The system should preserve evidence supporting the score.
 
 The score should be explainable and based on explicit job requirements and evaluation criteria.
 
-The exact scoring weights are not finalized yet. Scoring should be documented as a configurable design and finalized before implementation.
+The score is locked for Phase 4.2 in `backend/app/services/scoring_service.py`:
+category weights `must_have=3`, `important=2`, `nice_to_have=1`; evidence values
+`matched=1.0`, `partial=0.5`, `missing=0.0`; and
+`Score = [sum(weight x evidence_value)] / [sum(weights of ALL approved requirements)] x 100`,
+normalized to 0-100 with `SCORING_VERSION = "1.0"`. A missing must-have is a
+non-penalizing review signal only: no penalty and no auto-reject. The weights
+may be revisited in a later phase with explicit approval.
 
 ## Ranking
 

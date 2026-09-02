@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import requirement_key
 from app.ai.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -50,7 +51,11 @@ def create_job(
 
 
 def valid_payload() -> dict:
-    return {"title": "Data Engineer", "summary": "Builds pipelines", "requirements": ["Python"]}
+    return {
+        "title": "Data Engineer",
+        "summary": "Builds pipelines",
+        "requirements": [{"text": "Python", "category": "must_have", "dimension": "skill"}],
+    }
 
 
 def make_workflow(
@@ -96,7 +101,19 @@ def test_success_creates_profile_and_traces(db_session: Session) -> None:
     assert profile.status == "draft"
     assert profile.source == "ai_extracted"
     assert profile.is_current is True
-    assert profile.profile_data == {"schema_version": "1.0", **valid_payload()}
+    assert profile.profile_data == {
+        "schema_version": "1.1",
+        "title": "Data Engineer",
+        "summary": "Builds pipelines",
+        "requirements": [
+            {
+                "key": requirement_key("Python", "must_have"),
+                "text": "Python",
+                "category": "must_have",
+                "dimension": "skill",
+            }
+        ],
+    }
     assert profile.provenance == {
         "workflow": "job_profile_extraction",
         "provider": "fake",
@@ -119,6 +136,96 @@ def test_success_creates_profile_and_traces(db_session: Session) -> None:
     }
     assert "output_sha256" in trace.output_reference
     assert trace.token_usage == {"input_tokens": 10, "output_tokens": 5}
+
+
+def test_flat_v1_requirements_persisted_as_canonical_v1_1(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(
+        payload={
+            "title": "Data Engineer",
+            "summary": "Builds pipelines",
+            "requirements": ["Python"],
+        }
+    )
+    db_session.commit()
+
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    profile = db_session.get(JobProfile, result.profile_id)
+    assert profile.profile_data == {
+        "schema_version": "1.1",
+        "title": "Data Engineer",
+        "summary": "Builds pipelines",
+        "requirements": [
+            {
+                "key": requirement_key("Python", "important"),
+                "text": "Python",
+                "category": "important",
+                "dimension": "skill",
+            }
+        ],
+    }
+
+
+def test_llm_supplied_requirement_key_is_recomputed_on_persistence(
+    db_session: Session,
+) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(
+        payload={
+            "title": "Data Engineer",
+            "requirements": [
+                {
+                    "key": "req-tampered",
+                    "text": "Python",
+                    "category": "must_have",
+                    "dimension": "skill",
+                }
+            ],
+        }
+    )
+    db_session.commit()
+
+    result = workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    profile = db_session.get(JobProfile, result.profile_id)
+    persisted = profile.profile_data["requirements"][0]
+    assert persisted["key"] == requirement_key("Python", "must_have")
+    assert persisted["key"] != "req-tampered"
+
+
+def test_duplicate_requirements_payload_records_validation_failure(
+    db_session: Session,
+) -> None:
+    organization = create_organization(db_session)
+    create_user(db_session, organization)
+    job = create_job(db_session, organization)
+    workflow, _ = make_workflow(
+        payload={
+            "title": "Data Engineer",
+            "requirements": [
+                {"text": "Python", "category": "must_have", "dimension": "skill"},
+                {"text": "  Python  ", "category": "must_have", "dimension": "skill"},
+            ],
+        }
+    )
+    db_session.commit()
+
+    with pytest.raises(ValidationError, match="[Dd]uplicate"):
+        workflow.run(db_session, job_id=job.id, organization_id=organization.id)
+    db_session.commit()
+
+    run = only_one(db_session, WorkflowRun)
+    step = only_one(db_session, WorkflowStepTrace)
+    assert run.status == "failed"
+    assert step.status == "failed"
+    assert step.error_type == "ValidationError"
 
 
 def test_new_extraction_makes_version_current_when_none_approved(db_session: Session) -> None:
