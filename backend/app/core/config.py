@@ -17,6 +17,8 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://hr_ai_assistant:hr_ai_assistant@localhost:5432/hr_ai_assistant_test",
         validation_alias="TEST_DATABASE_URL",
     )
+    storage_root_dir: str = Field(default="./storage", validation_alias="STORAGE_ROOT_DIR")
+    max_upload_bytes: int = Field(default=5_000_000, validation_alias="MAX_UPLOAD_BYTES")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

@@ -35,6 +35,7 @@ class Resume(Base):
     content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    extracted_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -27,6 +27,12 @@ from app.services.observability_service import (
 )
 from app.services.organization_service import OrganizationService
 from app.services.resume_service import ResumeService
+from app.services.storage_service import LocalFileSystemStorage, StorageProvider
+from app.services.text_extraction_service import (
+    PdfTextExtractor,
+    TextExtractor,
+    extract_text,
+)
 from app.services.user_service import UserService
 from app.services.workflow_trace_service import WorkflowTraceService
 
@@ -41,14 +47,19 @@ __all__ = [
     "JobApplicationService",
     "JobProfileService",
     "JobService",
+    "LocalFileSystemStorage",
     "NotFoundError",
     "ObservabilityService",
     "OrganizationService",
+    "PdfTextExtractor",
     "ResumeService",
+    "StorageProvider",
+    "TextExtractor",
     "UserService",
     "VALID_DECISIONS",
     "ValidationError",
     "VersionConflictError",
     "WorkflowRunSummary",
     "WorkflowTraceService",
+    "extract_text",
 ]

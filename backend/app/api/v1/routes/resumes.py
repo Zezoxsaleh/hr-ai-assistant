@@ -1,14 +1,39 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import RequestContext, get_request_context
 from app.api.v1.schemas.resumes import ResumeCreate, ResumeResponse
+from app.core.config import settings
 from app.core.database import get_db
 from app.services.resume_service import ResumeService
+from app.services.storage_service import LocalFileSystemStorage
 
 router = APIRouter()
+
+
+@router.post(
+    "/candidates/{candidate_id}/resumes/upload",
+    response_model=ResumeResponse,
+    status_code=201,
+)
+def upload_resume(
+    candidate_id: str,
+    file: UploadFile = File(...),
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    return ResumeService().create_from_upload(
+        db,
+        candidate_id=uuid.UUID(candidate_id),
+        organization_id=ctx.organization_id,
+        filename=file.filename or "",
+        content_type=file.content_type or "",
+        file_bytes=file.file.read(),
+        max_upload_bytes=settings.max_upload_bytes,
+        storage=LocalFileSystemStorage(settings.storage_root_dir),
+    )
 
 
 @router.post(

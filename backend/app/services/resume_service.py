@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 from sqlalchemy.orm import Session
 
 from app.models import Candidate, Resume
-from app.services.errors import NotFoundError, ValidationError
+from app.services.errors import InvalidStateError, NotFoundError, ValidationError
+from app.services.storage_service import StorageProvider
+from app.services.text_extraction_service import (
+    DOCX_CONTENT_TYPE,
+    PDF_CONTENT_TYPE,
+    extract_text,
+)
 
 
 class ResumeService:
-    """Minimal resume CRUD operations."""
+    """Minimal resume CRUD and upload operations."""
 
     def create(
         self,
@@ -39,6 +46,72 @@ class ResumeService:
         db.flush()
         return resume
 
+    def create_from_upload(
+        self,
+        db: Session,
+        *,
+        candidate_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+        max_upload_bytes: int,
+        storage: StorageProvider,
+    ) -> Resume:
+        """Store an uploaded resume file, extract its text, and persist metadata.
+
+        Persists only the file path and metadata; raw file bytes never enter the
+        database. On any failure after the file is written to disk, the stored
+        file is deleted so no orphaned files remain. The caller owns the
+        transaction and rolls back on error.
+        """
+        self._validate_file(
+            filename=filename,
+            content_type=content_type,
+            file_bytes=file_bytes,
+            max_upload_bytes=max_upload_bytes,
+        )
+
+        candidate = db.get(Candidate, candidate_id)
+        if candidate is None:
+            raise NotFoundError("Candidate was not found.")
+        if candidate.organization_id != organization_id:
+            raise ValidationError("Candidate does not belong to the expected organization.")
+
+        extension = filename.rsplit(".", 1)[-1].lower()
+        resume_id = uuid.uuid4()
+        file_uri = self._save_file(
+            storage=storage,
+            organization_id=organization_id,
+            resume_id=resume_id,
+            extension=extension,
+            file_bytes=file_bytes,
+        )
+
+        # Once the file is on disk, any subsequent failure deletes it so no
+        # orphaned file remains. The caller rolls back the DB transaction.
+        try:
+            text = extract_text(file_bytes, filename=filename)
+            checksum = hashlib.sha256(file_bytes).hexdigest()
+            resume = Resume(
+                id=resume_id,
+                candidate_id=candidate_id,
+                file_uri=file_uri,
+                original_filename=filename,
+                content_type=content_type,
+                file_size_bytes=len(file_bytes),
+                checksum=checksum,
+                extracted_text=text,
+                status="text_extracted",
+            )
+            db.add(resume)
+            db.flush()
+        except Exception:
+            self._delete_file(storage, file_uri)
+            raise
+
+        return resume
+
     def get(
         self,
         db: Session,
@@ -53,3 +126,66 @@ class ResumeService:
         if resume.candidate.organization_id != organization_id:
             raise ValidationError("Resume does not belong to the expected organization.")
         return resume
+
+    def get_extracted_text(
+        self,
+        db: Session,
+        *,
+        resume_id: uuid.UUID,
+        organization_id: uuid.UUID,
+    ) -> str:
+        """Return the extracted text for a resume, for internal workflow use only.
+
+        Enforces organization scope and requires the resume to have extracted
+        text available.
+        """
+        resume = self.get(db, resume_id=resume_id, organization_id=organization_id)
+        if not resume.extracted_text:
+            raise InvalidStateError("Resume has no extracted text available.")
+        return resume.extracted_text
+
+    @staticmethod
+    def _validate_file(
+        *,
+        filename: str,
+        content_type: str,
+        file_bytes: bytes,
+        max_upload_bytes: int,
+    ) -> None:
+        if len(file_bytes) > max_upload_bytes:
+            raise ValidationError(
+                f"Uploaded file exceeds the maximum size of {max_upload_bytes} bytes."
+            )
+
+        extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        type_map = {"pdf": PDF_CONTENT_TYPE, "docx": DOCX_CONTENT_TYPE}
+        expected_type = type_map.get(extension)
+        if expected_type is None:
+            raise ValidationError(
+                "Unsupported file type: "
+                f"{extension or 'unknown'!r}. Only .pdf and .docx are allowed."
+            )
+        if content_type is None or content_type.lower() != expected_type:
+            raise ValidationError(
+                f"Content type {content_type!r} does not match the file extension .{extension}."
+            )
+
+    @staticmethod
+    def _save_file(
+        *,
+        storage: StorageProvider,
+        organization_id: uuid.UUID,
+        resume_id: uuid.UUID,
+        extension: str,
+        file_bytes: bytes,
+    ) -> str:
+        return storage.save(
+            organization_id=organization_id,
+            resume_id=resume_id,
+            extension=extension,
+            stream=lambda: file_bytes,
+        )
+
+    @staticmethod
+    def _delete_file(storage: StorageProvider, file_uri: str) -> None:
+        storage.delete(file_uri=file_uri)

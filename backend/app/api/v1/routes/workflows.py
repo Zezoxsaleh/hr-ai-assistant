@@ -50,14 +50,34 @@ def extract_candidate_profile(
 
     from app.ai.providers.fake import FakeAIProvider
     from app.ai.workflows import CandidateProfileExtractionWorkflow
+    from app.services.resume_service import ResumeService
 
-    provider = FakeAIProvider(provider="fake", model="fake-model")
+    resume_uuid = uuid.UUID(resume_id)
+    if body.resume_text is None:
+        resume_text = ResumeService().get_extracted_text(
+            db,
+            resume_id=resume_uuid,
+            organization_id=ctx.organization_id,
+        )
+    else:
+        resume_text = body.resume_text
+
+    provider = FakeAIProvider(
+        provider="fake",
+        model="fake-model",
+        structured_payload={
+            "full_name": "Extracted Candidate",
+            "summary": "Extracted from the supplied resume text.",
+            "skills": [],
+            "experience": [],
+        },
+    )
     workflow = CandidateProfileExtractionWorkflow(provider)
     result = workflow.run(
         db,
-        resume_id=uuid.UUID(resume_id),
+        resume_id=resume_uuid,
         organization_id=ctx.organization_id,
-        resume_text=body.resume_text,
+        resume_text=resume_text,
     )
     db.commit()
     return result

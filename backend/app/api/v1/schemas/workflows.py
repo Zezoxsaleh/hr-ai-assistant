@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class CandidateProfileExtractionRequest(BaseModel):
-    resume_text: str
+    resume_text: str | None = None
 
 
 class WorkflowRunResponse(BaseModel):

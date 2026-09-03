@@ -38,6 +38,18 @@ def client(db_session: Session) -> Generator[httpx.Client, None, None]:
     app.dependency_overrides.pop(get_db, None)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_storage_root(tmp_path) -> None:
+    """Point resume uploads at a temporary directory so tests don't write to
+    the real ``./storage`` directory under the backend."""
+    from app.core.config import settings
+
+    original = settings.storage_root_dir
+    settings.storage_root_dir = str(tmp_path / "storage")
+    yield
+    settings.storage_root_dir = original
+
+
 def auth_headers(org_id: str, user_id: str) -> dict[str, str]:
     """Return standard MVP auth headers."""
     return {"X-User-Id": user_id, "X-Organization-Id": org_id}
@@ -267,6 +279,135 @@ class TestResumes:
 
 
 # ---------------------------------------------------------------------------
+# Resume Upload (Phase 4.4)
+# ---------------------------------------------------------------------------
+
+
+class TestResumeUpload:
+    def _upload(
+        self,
+        client: httpx.Client,
+        h: dict,
+        cand_id: str,
+        filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> httpx.Response:
+        return client.post(
+            f"/api/v1/candidates/{cand_id}/resumes/upload",
+            headers=h,
+            files={
+                "file": (
+                    filename,
+                    content,
+                    content_type,
+                )
+            },
+        )
+
+    def test_upload_pdf(self, client: httpx.Client) -> None:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        resp = self._upload(
+            client,
+            h,
+            cand["id"],
+            "resume.pdf",
+            make_pdf_bytes(),
+            "application/pdf",
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["status"] == "text_extracted"
+        assert data["original_filename"] == "resume.pdf"
+        assert data["content_type"] == "application/pdf"
+        assert "extracted_text" not in data
+
+    def test_upload_docx(self, client: httpx.Client) -> None:
+        from tests.resume_upload_fixtures import make_docx_bytes
+
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        resp = self._upload(
+            client,
+            h,
+            cand["id"],
+            "resume.docx",
+            make_docx_bytes(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "text_extracted"
+        assert "extracted_text" not in resp.json()
+
+    def test_upload_rejects_wrong_extension(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        resp = self._upload(client, h, cand["id"], "resume.txt", b"hello", "text/plain")
+        assert resp.status_code == 422
+
+    def test_upload_rejects_content_type_mismatch(self, client: httpx.Client) -> None:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        resp = self._upload(
+            client,
+            h,
+            cand["id"],
+            "resume.pdf",
+            make_pdf_bytes(),
+            "text/plain",
+        )
+        assert resp.status_code == 422
+
+    def test_upload_rejects_empty_text(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        resp = self._upload(
+            client,
+            h,
+            cand["id"],
+            "resume.pdf",
+            b"%PDF-1.4\nnot a real pdf",
+            "application/pdf",
+        )
+        assert resp.status_code == 422
+
+    def test_upload_cross_org_isolation(self, client: httpx.Client) -> None:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        org1, user1 = bootstrap(client)
+        org2, user2 = bootstrap(client)
+        h1 = auth_headers(org1["id"], user1["id"])
+        h2 = auth_headers(org2["id"], user2["id"])
+
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h1).json()
+
+        resp = self._upload(
+            client,
+            h2,
+            cand["id"],
+            "resume.pdf",
+            make_pdf_bytes(),
+            "application/pdf",
+        )
+        assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Job Applications
 # ---------------------------------------------------------------------------
 
@@ -420,6 +561,86 @@ class TestCandidateProfiles:
         resp = client.get(f"/api/v1/resumes/{resume['id']}/profiles", headers=h)
         assert resp.status_code == 200
         assert len(resp.json()) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Candidate Profile Extraction (Phase 4.4 optional resume_text path)
+# ---------------------------------------------------------------------------
+
+
+class TestCandidateProfileExtraction:
+    def _upload_pdf(self, client: httpx.Client, h: dict, cand_id: str) -> dict:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        resp = client.post(
+            f"/api/v1/candidates/{cand_id}/resumes/upload",
+            headers=h,
+            files={
+                "file": (
+                    "resume.pdf",
+                    make_pdf_bytes(),
+                    "application/pdf",
+                )
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "text_extracted"
+        return resp.json()
+
+    def test_extract_using_stored_text_when_resume_text_omitted(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+        resume = self._upload_pdf(client, h, cand["id"])
+
+        resp = client.post(
+            f"/api/v1/resumes/{resume['id']}/extract-profile",
+            json={},
+            headers=h,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["profile_id"] is not None
+        assert data["workflow_run_id"] is not None
+        assert data["version_number"] == 1
+
+    def test_extract_with_explicit_resume_text(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+
+        # Create a resume with no text, then pass resume_text explicitly.
+        resume = client.post(
+            f"/api/v1/candidates/{cand['id']}/resumes",
+            json={"file_uri": "local://r.pdf"},
+            headers=h,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/resumes/{resume['id']}/extract-profile",
+            json={"resume_text": "Ada loves Python and mathematics."},
+            headers=h,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["version_number"] == 1
+
+    def test_extract_without_text_fails_when_no_stored_text(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
+        resume = client.post(
+            f"/api/v1/candidates/{cand['id']}/resumes",
+            json={"file_uri": "local://r.pdf"},
+            headers=h,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/resumes/{resume['id']}/extract-profile",
+            json={},
+            headers=h,
+        )
+        assert resp.status_code == 409
 
 
 # ---------------------------------------------------------------------------
