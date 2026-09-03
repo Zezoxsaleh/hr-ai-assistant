@@ -1,6 +1,31 @@
 from fastapi import APIRouter
 
+from app.api.v1.routes.candidate_profiles import router as candidate_profiles_router
+from app.api.v1.routes.candidates import router as candidates_router
+from app.api.v1.routes.evaluations import router as evaluations_router
 from app.api.v1.routes.health import router as health_router
+from app.api.v1.routes.hr_decisions import router as hr_decisions_router
+from app.api.v1.routes.job_applications import router as job_applications_router
+from app.api.v1.routes.job_profiles import router as job_profiles_router
+from app.api.v1.routes.jobs import router as jobs_router
+from app.api.v1.routes.observability import router as observability_router
+from app.api.v1.routes.organizations import router as organizations_router
+from app.api.v1.routes.resumes import router as resumes_router
+from app.api.v1.routes.users import router as users_router
+from app.api.v1.routes.workflows import router as workflows_router
 
 api_router = APIRouter()
+
 api_router.include_router(health_router, tags=["health"])
+api_router.include_router(organizations_router, tags=["organizations"])
+api_router.include_router(users_router, tags=["users"])
+api_router.include_router(jobs_router, tags=["jobs"])
+api_router.include_router(job_profiles_router, tags=["job-profiles"])
+api_router.include_router(candidates_router, tags=["candidates"])
+api_router.include_router(resumes_router, tags=["resumes"])
+api_router.include_router(job_applications_router, tags=["job-applications"])
+api_router.include_router(candidate_profiles_router, tags=["candidate-profiles"])
+api_router.include_router(evaluations_router, tags=["evaluations"])
+api_router.include_router(hr_decisions_router, tags=["hr-decisions"])
+api_router.include_router(workflows_router, tags=["workflows"])
+api_router.include_router(observability_router, tags=["observability"])
