@@ -867,3 +867,162 @@ class TestNoEvaluationCreate:
             json={},
         )
         assert resp.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# Candidate Pool (job-scoped ranking)
+# ---------------------------------------------------------------------------
+
+
+class TestCandidatePool:
+    def _seed(
+        self,
+        client: httpx.Client,
+        db_session: Session,
+        org: dict,
+        user: dict,
+    ) -> tuple[models.Job, dict]:
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+
+        h = auth_headers(org["id"], user["id"])
+        resp = client.post("/api/v1/jobs", json={"title": "Pool Job"}, headers=h)
+        job = resp.json()
+        job_obj = db_session.get(models.Job, uuid.UUID(job["id"]))
+
+        job_profile = models.JobProfile(
+            job_id=job_obj.id,
+            version_number=1,
+            status="approved",
+            source="hr_created",
+            profile_data={"title": "Pool Job", "requirements": []},
+            approved_by_user_id=user_obj.id,
+            approved_at=datetime.now(UTC),
+            is_current=True,
+        )
+        db_session.add(job_profile)
+        db_session.flush()
+
+        def add_candidate(full_name, email, score=None, decision=None):
+            candidate = models.Candidate(
+                organization_id=organization.id, full_name=full_name, email=email
+            )
+            db_session.add(candidate)
+            db_session.flush()
+            resume = models.Resume(candidate_id=candidate.id, file_uri="local://pool.pdf")
+            db_session.add(resume)
+            db_session.flush()
+            application = models.JobApplication(
+                organization_id=organization.id,
+                job_id=job_obj.id,
+                candidate_id=candidate.id,
+                resume_id=resume.id,
+            )
+            db_session.add(application)
+            db_session.flush()
+            candidate_profile = models.CandidateProfile(
+                resume_id=resume.id,
+                version_number=1,
+                status="current",
+                source="system_extracted",
+                profile_data={"skills": []},
+                is_current=True,
+            )
+            db_session.add(candidate_profile)
+            db_session.flush()
+            if score is not None:
+                evaluation = models.CandidateEvaluation(
+                    job_application_id=application.id,
+                    job_profile_id=job_profile.id,
+                    candidate_profile_id=candidate_profile.id,
+                    version_number=1,
+                    status="completed",
+                    score=Decimal(score),
+                    recommendation="advance",
+                    is_current=True,
+                    completed_at=datetime.now(UTC),
+                )
+                db_session.add(evaluation)
+                db_session.flush()
+            if decision is not None:
+                hr_decision = models.HRDecision(
+                    job_application_id=application.id,
+                    user_id=user_obj.id,
+                    decision=decision,
+                    reason="Reviewer decision.",
+                )
+                db_session.add(hr_decision)
+                db_session.flush()
+            return candidate, application
+
+        add_candidate("Ada Top", "ada@example.com", score=88, decision="advance")
+        add_candidate("Ben Mid", "ben@example.com", score=55, decision="hold")
+        add_candidate("Cid Low", "cid@example.com", score=20)
+        no_eval, no_eval_app = add_candidate("Dee None", "dee@example.com")
+        db_session.commit()
+        return job_obj, {"no_eval_candidate": no_eval, "no_eval_app": no_eval_app}
+
+    def test_list_ranked_candidates(self, client: httpx.Client, db_session: Session) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job, _ = self._seed(client, db_session, org, user)
+
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates", headers=h)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 4
+
+        names = [row["full_name"] for row in data]
+        assert names == ["Ada Top", "Ben Mid", "Cid Low", "Dee None"]
+        assert data[0]["group"] == "must_review"
+        assert data[1]["group"] == "consider"
+        assert data[2]["group"] == "lower_priority"
+        assert data[3]["group"] == "lower_priority"
+        assert data[0]["decision"] == "advance"
+        assert data[1]["decision"] == "hold"
+        assert data[2]["decision"] is None
+        assert data[3]["score"] is None
+        assert data[0]["score"] == "88"
+        for row in data:
+            assert "extracted_text" not in row
+            assert "candidate_id" in row
+            assert "application_id" in row
+
+    def test_group_and_search_filters(self, client: httpx.Client, db_session: Session) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job, _ = self._seed(client, db_session, org, user)
+
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates?group=consider", headers=h)
+        assert resp.status_code == 200
+        assert [row["full_name"] for row in resp.json()] == ["Ben Mid"]
+
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates?search=dee@example", headers=h)
+        assert resp.status_code == 200
+        assert [row["full_name"] for row in resp.json()] == ["Dee None"]
+
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates?decision=hold", headers=h)
+        assert resp.status_code == 200
+        assert [row["full_name"] for row in resp.json()] == ["Ben Mid"]
+
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates?min_score=40", headers=h)
+        assert resp.status_code == 200
+        assert [row["full_name"] for row in resp.json()] == ["Ada Top", "Ben Mid"]
+
+    def test_cross_org_job_returns_422(self, client: httpx.Client, db_session: Session) -> None:
+        org_a, user_a = bootstrap(client)
+        job, _ = self._seed(client, db_session, org_a, user_a)
+
+        org_b, user_b = bootstrap(client)
+        h = auth_headers(org_b["id"], user_b["id"])
+        resp = client.get(f"/api/v1/jobs/{job.id}/candidates", headers=h)
+        assert resp.status_code == 422
+
+    def test_nonexistent_job_returns_404(self, client: httpx.Client, db_session: Session) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        resp = client.get(f"/api/v1/jobs/{uuid.uuid4()}/candidates", headers=h)
+        assert resp.status_code == 404

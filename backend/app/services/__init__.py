@@ -6,6 +6,7 @@ CRUD services for API-layer resource management. Services accept a caller-owned
 SQLAlchemy Session; they add/flush/query but never commit.
 """
 
+from app.services.candidate_pool_service import CandidatePoolService
 from app.services.candidate_profile_service import CandidateProfileService
 from app.services.candidate_service import CandidateService
 from app.services.decision_service import VALID_DECISIONS, DecisionService
@@ -39,6 +40,7 @@ from app.services.workflow_trace_service import WorkflowTraceService
 __all__ = [
     "AIFailureSummary",
     "ApplicationError",
+    "CandidatePoolService",
     "CandidateProfileService",
     "CandidateService",
     "DecisionService",

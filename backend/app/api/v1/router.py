@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.v1.routes.candidate_pool import router as candidate_pool_router
 from app.api.v1.routes.candidate_profiles import router as candidate_profiles_router
 from app.api.v1.routes.candidates import router as candidates_router
 from app.api.v1.routes.evaluations import router as evaluations_router
@@ -22,6 +23,7 @@ api_router.include_router(users_router, tags=["users"])
 api_router.include_router(jobs_router, tags=["jobs"])
 api_router.include_router(job_profiles_router, tags=["job-profiles"])
 api_router.include_router(candidates_router, tags=["candidates"])
+api_router.include_router(candidate_pool_router, tags=["candidates"])
 api_router.include_router(resumes_router, tags=["resumes"])
 api_router.include_router(job_applications_router, tags=["job-applications"])
 api_router.include_router(candidate_profiles_router, tags=["candidate-profiles"])
