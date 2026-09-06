@@ -17,6 +17,7 @@ import CandidateDetails from "./pages/candidates/CandidateDetails";
 import ScreenCandidates from "./pages/candidates/ScreenCandidates";
 import EvaluationsList from "./pages/evaluations/EvaluationsList";
 import ApplicationsList from "./pages/applications/ApplicationsList";
+import ApplicationReview from "./pages/review/ApplicationReview";
 import InterviewsList from "./pages/interviews/InterviewsList";
 import ScheduleInterview from "./pages/interviews/ScheduleInterview";
 import InterviewFeedback from "./pages/interviews/InterviewFeedback";
@@ -59,6 +60,7 @@ export default function App() {
             <Route path="/evaluations" element={<EvaluationsList />} />
 
             <Route path="/applications" element={<ApplicationsList />} />
+            <Route path="/applications/:id/review" element={<ApplicationReview />} />
 
             <Route path="/interviews" element={<InterviewsList />} />
             <Route path="/interviews/schedule" element={<ScheduleInterview />} />

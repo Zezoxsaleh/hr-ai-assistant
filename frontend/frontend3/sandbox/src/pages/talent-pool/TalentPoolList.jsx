@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Sparkles, Search, ArrowRight } from "lucide-react";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import EmptyState from "../../components/common/EmptyState";
@@ -29,6 +30,7 @@ export default function TalentPoolList() {
   const [group, setGroup] = useState("all");
   const [target, setTarget] = useState(null);
   const [reengaging, setReengaging] = useState(false);
+  const navigate = useNavigate();
 
   const load = () => {
     setLoading(true);
@@ -133,7 +135,7 @@ export default function TalentPoolList() {
               </thead>
               <tbody>
                 {filtered.map((c) => (
-                  <tr key={c.id}>
+                  <tr key={c.id} className={c.applicationId ? "clickable" : ""} onClick={() => c.applicationId && navigate(`/applications/${c.applicationId}/review`)}>
                     <td>
                       <div className="candidate-cell">
                         <div className="mini-avatar">
@@ -168,7 +170,7 @@ export default function TalentPoolList() {
                     </td>
                     <td className="muted-note">{c.lastContactDaysAgo} days ago</td>
                     <td>
-                      <div className="row-actions">
+                      <div className="row-actions" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           className="btn btn-secondary btn-small"

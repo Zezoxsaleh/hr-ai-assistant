@@ -13,6 +13,8 @@ const GROUP_TO_EVAL = {
 function mapBackendRow(row) {
   return {
     id: row.application_id || row.candidate_id,
+    applicationId: row.application_id,
+    candidateId: row.candidate_id,
     name: row.full_name || "Unknown",
     email: row.email || "",
     previousJob: row.title || "—",

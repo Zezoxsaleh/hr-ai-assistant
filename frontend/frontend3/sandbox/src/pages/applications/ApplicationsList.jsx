@@ -82,7 +82,7 @@ export default function ApplicationsList() {
         <DataTable
           columns={columns}
           data={applications}
-          onRowClick={(row) => navigate(`/candidates/${row.candidateId}`)}
+          onRowClick={(row) => navigate(`/applications/${row.id}/review`)}
           emptyLabel="No applications in this stage."
         />
       )}

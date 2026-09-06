@@ -8,12 +8,29 @@ import apiClient from "./apiClient";
 // consumes.
 
 function buildRawDescription(job) {
+  const description = stripDerivedSuffix(job.description, job.requirements, job.requiredSkills);
   const parts = [
-    job.description,
+    description,
     ...(job.requirements || []).map((r) => `- ${r}`),
     ...(job.requiredSkills || []).map((s) => `Skills: ${s}`),
   ].filter(Boolean);
   return parts.length ? parts.join("\n") : job.title || "";
+}
+
+// raw_description is a derived composition (see buildRawDescription). The edit
+// form preloads that composed value as `description`, so before recomposing we
+// strip the exact derived suffix; otherwise an unchanged save grows the stored
+// description every time (requirement/skill lines duplicate on each save).
+function stripDerivedSuffix(raw, requirements, requiredSkills) {
+  if (!raw) return raw || "";
+  const derived = [
+    ...(requirements || []).map((r) => `- ${r}`),
+    ...(requiredSkills || []).map((s) => `Skills: ${s}`),
+  ].join("\n");
+  if (!derived) return raw;
+  if (raw === derived) return "";
+  const suffix = `\n${derived}`;
+  return raw.endsWith(suffix) ? raw.slice(0, raw.length - suffix.length) : raw;
 }
 
 // Full payload for POST /jobs.
