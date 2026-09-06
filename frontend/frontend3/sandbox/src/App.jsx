@@ -1,0 +1,77 @@
+import React from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { IdentityProvider } from "./context/IdentityContext";
+import ProtectedRoute from "./components/common/ProtectedRoute";
+
+import AuthLayout from "./layouts/AuthLayout";
+import MainLayout from "./layouts/MainLayout";
+
+import DevelopmentIdentity from "./pages/identity/DevelopmentIdentity";
+
+import Dashboard from "./pages/dashboard/Dashboard";
+import JobsList from "./pages/jobs/JobsList";
+import JobDetails from "./pages/jobs/JobDetails";
+import JobForm from "./pages/jobs/JobForm";
+import CandidatesList from "./pages/candidates/CandidatesList";
+import CandidateDetails from "./pages/candidates/CandidateDetails";
+import ScreenCandidates from "./pages/candidates/ScreenCandidates";
+import EvaluationsList from "./pages/evaluations/EvaluationsList";
+import ApplicationsList from "./pages/applications/ApplicationsList";
+import InterviewsList from "./pages/interviews/InterviewsList";
+import ScheduleInterview from "./pages/interviews/ScheduleInterview";
+import InterviewFeedback from "./pages/interviews/InterviewFeedback";
+import TalentPoolList from "./pages/talent-pool/TalentPoolList";
+import AnalyticsPage from "./pages/analytics/AnalyticsPage";
+import AIActivityList from "./pages/ai-activity/AIActivityList";
+import NotFound from "./pages/NotFound";
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <IdentityProvider>
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+
+          {/* Development identity (not production authentication) */}
+          <Route element={<AuthLayout />}>
+            <Route path="/identity" element={<DevelopmentIdentity />} />
+          </Route>
+
+          {/* Protected app routes */}
+          <Route
+            element={
+              <ProtectedRoute>
+                <MainLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route path="/dashboard" element={<Dashboard />} />
+
+            <Route path="/jobs" element={<JobsList />} />
+            <Route path="/jobs/new" element={<JobForm />} />
+            <Route path="/jobs/:id/edit" element={<JobForm />} />
+            <Route path="/jobs/:id" element={<JobDetails />} />
+
+            <Route path="/candidates" element={<CandidatesList />} />
+            <Route path="/candidates/screen" element={<ScreenCandidates />} />
+            <Route path="/candidates/:id" element={<CandidateDetails />} />
+
+            <Route path="/evaluations" element={<EvaluationsList />} />
+
+            <Route path="/applications" element={<ApplicationsList />} />
+
+            <Route path="/interviews" element={<InterviewsList />} />
+            <Route path="/interviews/schedule" element={<ScheduleInterview />} />
+            <Route path="/interviews/:id/feedback" element={<InterviewFeedback />} />
+
+            <Route path="/talent-pool" element={<TalentPoolList />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
+            <Route path="/ai-activity" element={<AIActivityList />} />
+          </Route>
+
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </IdentityProvider>
+    </BrowserRouter>
+  );
+}
