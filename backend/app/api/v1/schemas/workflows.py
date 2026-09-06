@@ -59,3 +59,17 @@ class CandidateEvaluationRunResponse(BaseModel):
     evaluation_id: UUID
     workflow_run_id: UUID
     version_number: int
+
+
+class ScreenedCandidateResponse(BaseModel):
+    candidate_id: UUID
+    resume_id: UUID
+    application_id: UUID
+    evaluation_id: UUID
+    score: str | None = None
+
+
+class JobScreeningResponse(BaseModel):
+    job_id: UUID
+    job_title: str
+    screened: list[ScreenedCandidateResponse]

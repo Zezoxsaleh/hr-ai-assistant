@@ -4,11 +4,19 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class CandidateEvaluationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("score", mode="before")
+    @classmethod
+    def _stringify_score(cls, value: object) -> str | None:
+        """Stringify the numeric score column (Decimal) for the response contract."""
+        if value is None:
+            return None
+        return str(value)
 
     id: UUID
     job_application_id: UUID

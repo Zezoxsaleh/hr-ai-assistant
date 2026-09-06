@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -37,6 +37,12 @@ class Job(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     raw_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
+    department: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    job_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    experience: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    requirements: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    required_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

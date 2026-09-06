@@ -177,10 +177,75 @@ class TestJobs:
         job = resp.json()
         assert job["title"] == "Engineer"
         assert job["organization_id"] == org["id"]
+        assert job["status"] == "draft"
 
         resp = client.get(f"/api/v1/jobs/{job['id']}", headers=h)
         assert resp.status_code == 200
         assert resp.json()["title"] == "Engineer"
+
+    def test_list_jobs(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        client.post("/api/v1/jobs", json={"title": "Job A"}, headers=h)
+        client.post("/api/v1/jobs", json={"title": "Job B"}, headers=h)
+
+        resp = client.get("/api/v1/jobs", headers=h)
+        assert resp.status_code == 200
+        titles = [j["title"] for j in resp.json()]
+        assert {"Job A", "Job B"}.issubset(titles)
+
+        other_org, other_user = bootstrap(client)
+        other_h = auth_headers(other_org["id"], other_user["id"])
+        resp = client.get("/api/v1/jobs", headers=other_h)
+        assert resp.status_code == 200
+        assert all(j["title"] not in ("Job A", "Job B") for j in resp.json())
+
+    def test_delete_job(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.post("/api/v1/jobs", json={"title": "To Delete"}, headers=h)
+        job_id = resp.json()["id"]
+
+        resp = client.delete(f"/api/v1/jobs/{job_id}", headers=h)
+        assert resp.status_code == 204
+
+        resp = client.get(f"/api/v1/jobs/{job_id}", headers=h)
+        assert resp.status_code == 404
+
+        resp = client.get("/api/v1/jobs", headers=h)
+        assert resp.status_code == 200
+        assert all(j["id"] != job_id for j in resp.json())
+
+    def test_delete_job_in_use_rejected(self, client: httpx.Client, db_session: Session) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        job = client.post("/api/v1/jobs", json={"title": "In Use"}, headers=h).json()
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        candidate = models.Candidate(
+            organization_id=organization.id, full_name="Candi", email="candi@test.com"
+        )
+        db_session.add(candidate)
+        db_session.flush()
+        resume = models.Resume(candidate_id=candidate.id, file_uri="local://r.pdf")
+        db_session.add(resume)
+        db_session.flush()
+        application = models.JobApplication(
+            organization_id=organization.id,
+            job_id=uuid.UUID(job["id"]),
+            candidate_id=candidate.id,
+            resume_id=resume.id,
+        )
+        db_session.add(application)
+        db_session.flush()
+
+        resp = client.delete(f"/api/v1/jobs/{job['id']}", headers=h)
+        assert resp.status_code == 409
+
+        resp = client.get(f"/api/v1/jobs/{job['id']}", headers=h)
+        assert resp.status_code == 200
 
     def test_update_job(self, client: httpx.Client) -> None:
         org, user = bootstrap(client)
@@ -1025,4 +1090,101 @@ class TestCandidatePool:
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
         resp = client.get(f"/api/v1/jobs/{uuid.uuid4()}/candidates", headers=h)
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Job screening (Phase 4.5 batch CV screening endpoint)
+# ---------------------------------------------------------------------------
+
+
+class TestJobScreening:
+    def _pdf(self, filename: str = "ada-lovelace.pdf") -> tuple[str, bytes, str]:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        return filename, make_pdf_bytes(), "application/pdf"
+
+    def test_screen_batch_creates_candidates_applications_evaluations(
+        self, client: httpx.Client
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        job = client.post(
+            "/api/v1/jobs",
+            json={
+                "title": "Screening Test Job",
+                "status": "active",
+                "raw_description": "Build and maintain backend services.",
+            },
+            headers=h,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/jobs/{job['id']}/screen",
+            headers=h,
+            files=[
+                ("files", self._pdf("ada-lovelace.pdf")),
+                ("files", self._pdf("grace-hopper-cv.pdf")),
+            ],
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["job_id"] == job["id"]
+        assert data["job_title"] == "Screening Test Job"
+        assert len(data["screened"]) == 2
+
+        for row in data["screened"]:
+            assert row["candidate_id"] is not None
+            assert row["resume_id"] is not None
+            assert row["application_id"] is not None
+            assert row["evaluation_id"] is not None
+
+            apps = client.get(
+                f"/api/v1/job-applications/{row['application_id']}",
+                headers=h,
+            )
+            assert apps.status_code == 200
+
+            evals = client.get(
+                f"/api/v1/job-applications/{row['application_id']}/evaluations",
+                headers=h,
+            )
+            assert evals.status_code == 200
+            assert len(evals.json()) >= 1
+
+        resp = client.get(f"/api/v1/jobs/{job['id']}/applications", headers=h)
+        assert resp.status_code == 200
+        assert len(resp.json()) == 2
+
+    def test_screen_rejects_empty_file(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        job = client.post(
+            "/api/v1/jobs",
+            json={
+                "title": "Screening Empty Job",
+                "status": "active",
+                "raw_description": "A job description.",
+            },
+            headers=h,
+        ).json()
+
+        resp = client.post(
+            f"/api/v1/jobs/{job['id']}/screen",
+            headers=h,
+            files=[("files", ("empty.pdf", b"", "application/pdf"))],
+        )
+        assert resp.status_code == 422
+
+    def test_screen_nonexistent_job_returns_404(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.post(
+            f"/api/v1/jobs/{uuid.uuid4()}/screen",
+            headers=h,
+            files=[("files", self._pdf("ada-lovelace.pdf"))],
+        )
         assert resp.status_code == 404

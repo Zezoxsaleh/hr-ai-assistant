@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,14 @@ class Settings(BaseSettings):
     )
     storage_root_dir: str = Field(default="./storage", validation_alias="STORAGE_ROOT_DIR")
     max_upload_bytes: int = Field(default=5_000_000, validation_alias="MAX_UPLOAD_BYTES")
+    cors_allow_origins: list[str] = Field(
+        default=["http://localhost:5173", "http://127.0.0.1:5173"],
+        validation_alias="CORS_ALLOW_ORIGINS",
+    )
+    cors_allow_methods: Literal["*"] | list[str] = Field(
+        default=["GET", "POST", "PATCH", "DELETE"],
+        validation_alias="CORS_ALLOW_METHODS",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

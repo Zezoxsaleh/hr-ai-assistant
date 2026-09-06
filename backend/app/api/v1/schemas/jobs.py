@@ -9,12 +9,25 @@ from pydantic import BaseModel, ConfigDict
 class JobCreate(BaseModel):
     title: str
     raw_description: str | None = None
+    status: str = "draft"
+    department: str | None = None
+    location: str | None = None
+    job_type: str | None = None
+    experience: str | None = None
+    requirements: list[str] = []
+    required_skills: list[str] = []
 
 
 class JobUpdate(BaseModel):
     title: str | None = None
     raw_description: str | None = None
     status: str | None = None
+    department: str | None = None
+    location: str | None = None
+    job_type: str | None = None
+    experience: str | None = None
+    requirements: list[str] | None = None
+    required_skills: list[str] | None = None
 
 
 class JobResponse(BaseModel):
@@ -26,5 +39,11 @@ class JobResponse(BaseModel):
     title: str
     raw_description: str | None
     status: str
+    department: str | None = None
+    location: str | None = None
+    job_type: str | None = None
+    experience: str | None = None
+    requirements: list[str] | None = None
+    required_skills: list[str] | None = None
     created_at: datetime
     updated_at: datetime

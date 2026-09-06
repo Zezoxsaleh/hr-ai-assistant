@@ -22,8 +22,32 @@ def create_job(
         organization_id=ctx.organization_id,
         title=body.title,
         raw_description=body.raw_description,
+        status=body.status,
+        department=body.department,
+        location=body.location,
+        job_type=body.job_type,
+        experience=body.experience,
+        requirements=body.requirements,
+        required_skills=body.required_skills,
         created_by_user_id=ctx.user_id,
     )
+
+
+@router.get("/jobs", response_model=list[JobResponse])
+def list_jobs(
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    return JobService().list(db, organization_id=ctx.organization_id)
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+def delete_job(
+    job_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    JobService().delete(db, job_id=uuid.UUID(job_id), organization_id=ctx.organization_id)
 
 
 @router.get("/jobs/{job_id}", response_model=JobResponse)
@@ -49,4 +73,10 @@ def update_job(
         title=body.title,
         raw_description=body.raw_description,
         status=body.status,
+        department=body.department,
+        location=body.location,
+        job_type=body.job_type,
+        experience=body.experience,
+        requirements=body.requirements,
+        required_skills=body.required_skills,
     )
