@@ -2,6 +2,7 @@ import React from "react";
 import { Link } from "react-router-dom";
 import { Bell, ShieldCheck } from "lucide-react";
 import useIdentity from "../../hooks/useIdentity";
+import { BRAND } from "../../config/brand";
 
 const TITLES = {
   "/dashboard": "Dashboard",
@@ -26,7 +27,7 @@ export default function Navbar({ pathname }) {
   return (
     <header className="topbar">
       <div>
-        <p className="eyebrow">AI RECRUITMENT</p>
+        <p className="eyebrow">{BRAND.eyebrow}</p>
         <h1>{matchedTitle}</h1>
       </div>
 

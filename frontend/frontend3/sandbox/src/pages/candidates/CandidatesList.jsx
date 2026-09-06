@@ -1,0 +1,181 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Search, Plus, ChevronRight } from "lucide-react";
+import Badge from "../../components/common/Badge";
+import Pagination from "../../components/common/Pagination";
+import LoadingSpinner from "../../components/common/LoadingSpinner";
+import EmptyState from "../../components/common/EmptyState";
+import ErrorState from "../../components/common/ErrorState";
+import { getCandidates } from "../../services/candidateService";
+import { JobApplicationStatus } from "../../types/api";
+
+// Display labels for the backend's application status vocabulary (the pool's
+// status field). The filter dropdown uses the same values the API returns.
+const STATUS_OPTIONS = [
+  { value: JobApplicationStatus.CREATED, label: "Created" },
+  { value: JobApplicationStatus.READY_FOR_REVIEW, label: "Ready for Review" },
+  { value: JobApplicationStatus.HOLD, label: "Hold" },
+  { value: JobApplicationStatus.ADVANCED, label: "Advanced" },
+  { value: JobApplicationStatus.REJECTED, label: "Rejected" },
+];
+
+const PAGE_SIZE = 5;
+
+export default function CandidatesList() {
+  const [candidates, setCandidates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("all");
+  const [sort, setSort] = useState("score");
+  const [page, setPage] = useState(1);
+  const navigate = useNavigate();
+
+  const load = () => {
+    setLoading(true);
+    setError(false);
+    getCandidates()
+      .then((data) => {
+        setCandidates(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        setError(true);
+        setLoading(false);
+      });
+  };
+
+  useEffect(load, []);
+
+  // Reset back to page 1 whenever the filters change so we never land on an
+  // empty page after narrowing the results.
+  useEffect(() => {
+    setPage(1);
+  }, [search, status, sort]);
+
+  const filtered = useMemo(() => {
+    let list = candidates.filter(
+      (c) =>
+        `${c.name} ${c.title} ${c.email}`.toLowerCase().includes(search.toLowerCase()) &&
+        (status === "all" || c.status === status)
+    );
+    return list.sort((a, b) => (sort === "score" ? b.score - a.score : a.name.localeCompare(b.name)));
+  }, [candidates, search, status, sort]);
+
+  const paged = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  if (loading) return <LoadingSpinner label="Loading candidates..." />;
+  if (error) return <ErrorState message="Unable to load candidates. Please try again." onRetry={load} />;
+
+  return (
+    <section>
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">CANDIDATES</p>
+          <h3>All Candidates</h3>
+        </div>
+        <button className="primary" onClick={() => navigate("/candidates/screen")}>
+          <Plus size={18} /> New Screening
+        </button>
+      </div>
+
+      <div className="toolbar">
+        <div className="search">
+          <Search size={18} />
+          <input
+            placeholder="Search candidates..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="all">All Status</option>
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <select value={sort} onChange={(e) => setSort(e.target.value)}>
+          <option value="score">Highest Score</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+
+      {!candidates.length ? (
+        <EmptyState message="No candidates found." />
+      ) : (
+        <>
+          <div className="panel table-panel">
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Candidate</th>
+                    <th>Job</th>
+                    <th>Match</th>
+                    <th>Status</th>
+                    <th>Experience</th>
+                    <th>Skills</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {paged.map((c) => (
+                    <tr key={c.id} className="clickable" onClick={() => navigate(`/candidates/${c.id}`)}>
+                      <td>
+                        <div className="candidate-cell">
+                          <div className="mini-avatar">
+                            {c.name
+                              .split(" ")
+                              .map((x) => x[0])
+                              .join("")
+                              .slice(0, 2)}
+                          </div>
+                          <div>
+                            <strong>{c.name}</strong>
+                            <span>{c.email}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{c.title}</td>
+                      <td>
+                        <div className="score">
+                          <strong>{c.score}%</strong>
+                          <div>
+                            <i style={{ width: `${c.score}%` }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <Badge status={c.status} />
+                      </td>
+                      <td>{c.experience} yrs</td>
+                      <td>
+                        <div className="skill-preview">
+                          {c.matching.slice(0, 3).map((s) => (
+                            <span key={s}>{s}</span>
+                          ))}
+                          {c.matching.length > 3 && <span>+{c.matching.length - 3}</span>}
+                        </div>
+                      </td>
+                      <td>
+                        <ChevronRight size={17} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!filtered.length && <EmptyState message="No candidates match your filters." />}
+          </div>
+
+          <Pagination total={filtered.length} pageSize={PAGE_SIZE} page={page} onPageChange={setPage} />
+        </>
+      )}
+    </section>
+  );
+}

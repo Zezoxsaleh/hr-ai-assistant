@@ -26,8 +26,4 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// When true (default), services return mock data and the whole UI works
-// without a backend. Set VITE_USE_MOCK_DATA=false to hit the real API.
-export const USE_MOCK_DATA = import.meta.env.VITE_USE_MOCK_DATA !== "false";
-
 export default apiClient;
