@@ -31,3 +31,10 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Runtime-generated data (uploaded CVs, temp outputs)
+backend/storage/
+
+# Node / frontend build artifacts
+node_modules/
+dist/

@@ -261,6 +261,21 @@ button {
   margin-bottom: 12px;
 }
 
+.demo-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 750;
+  color: #7a4b0c;
+  background: #fffaeb;
+  border: 1px solid #fcd9a3;
+  margin-left: 10px;
+  vertical-align: middle;
+}
+
 .section-head h3,
 .panel h3 {
   margin: 0;
@@ -2252,4 +2267,44 @@ textarea {
 .dev-identity-chip span {
   font-size: 11px;
   color: #98a2b3;
+}
+
+.profile-card {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 12px;
+  background: #fafbfc;
+}
+
+.profile-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.profile-card-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-actions {
+  margin-top: 4px;
+}
+
+.profile-card h4 {
+  margin: 10px 0 6px;
+}
+
+.profile-card .chips {
+  margin-top: 4px;
 }

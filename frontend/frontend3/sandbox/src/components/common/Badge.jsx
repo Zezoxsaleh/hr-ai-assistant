@@ -16,6 +16,8 @@ const TONE_BY_STATUS = {
   Closed: "red",
   Draft: "amber",
   Scheduled: "blue",
+  Approved: "green",
+  Superseded: "grey",
   Completed: "grey",
   "Awaiting Profile Review": "blue",
   Archived: "grey",
