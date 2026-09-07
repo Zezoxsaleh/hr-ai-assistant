@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Generator
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import models
@@ -1075,15 +1077,6 @@ class TestNoMatchEvidencePost:
 # ---------------------------------------------------------------------------
 
 
-class TestNoEvaluationCreate:
-    def test_no_post_evaluation_endpoint(self, client: httpx.Client) -> None:
-        resp = client.post(
-            "/api/v1/job-applications/00000000-0000-0000-0000-000000000000/evaluations",
-            json={},
-        )
-        assert resp.status_code == 405
-
-
 # ---------------------------------------------------------------------------
 # Candidate Pool (job-scoped ranking)
 # ---------------------------------------------------------------------------
@@ -1338,3 +1331,409 @@ class TestJobScreening:
             files=[("files", self._pdf("ada-lovelace.pdf"))],
         )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Application / Review / Talent Pool read models
+# ---------------------------------------------------------------------------
+
+
+def _seed_application_records(
+    db_session: Session,
+    organization: models.Organization,
+    user: models.User,
+) -> tuple[models.JobApplication, models.Job, models.Candidate, models.Resume]:
+    """Insert application parent records (job, candidate, resume, app, profiles)."""
+    job = models.Job(
+        organization_id=organization.id,
+        created_by_user_id=user.id,
+        title="Read Model Job",
+    )
+    candidate = models.Candidate(
+        organization_id=organization.id,
+        full_name="Read Model Candidate",
+        email="read-model@example.com",
+    )
+    db_session.add_all([job, candidate])
+    db_session.flush()
+
+    resume = models.Resume(candidate_id=candidate.id, file_uri="local://read-model.pdf")
+    db_session.add(resume)
+    db_session.flush()
+
+    application = models.JobApplication(
+        organization_id=organization.id,
+        job_id=job.id,
+        candidate_id=candidate.id,
+        resume_id=resume.id,
+    )
+    db_session.add(application)
+    db_session.flush()
+
+    job_profile = models.JobProfile(
+        job_id=job.id,
+        version_number=1,
+        status="approved",
+        source="hr_created",
+        profile_data={"title": "Read Model Job", "requirements": [], "skills": ["Python"]},
+        approved_by_user_id=user.id,
+        approved_at=datetime.now(UTC),
+        is_current=True,
+    )
+    candidate_profile = models.CandidateProfile(
+        resume_id=resume.id,
+        version_number=1,
+        status="current",
+        source="system_extracted",
+        profile_data={"skills": ["Python"]},
+        is_current=True,
+    )
+    db_session.add_all([job_profile, candidate_profile])
+    db_session.flush()
+
+    return application, job, candidate, resume
+
+
+def _seed_evaluation(
+    db_session: Session,
+    application: models.JobApplication,
+    *,
+    score: str = "95.000",
+    recommendation: str | None = None,
+) -> models.CandidateEvaluation:
+    """Insert a completed current evaluation for an application."""
+    job_profile = db_session.scalar(
+        select(models.JobProfile)
+        .where(models.JobProfile.job_id == application.job_id)
+        .order_by(models.JobProfile.version_number)
+    )
+    resume = db_session.get(models.Resume, application.resume_id)
+    candidate_profile = db_session.scalar(
+        select(models.CandidateProfile)
+        .where(models.CandidateProfile.resume_id == resume.id)
+        .order_by(models.CandidateProfile.version_number)
+    )
+    evaluation = models.CandidateEvaluation(
+        job_application_id=application.id,
+        job_profile_id=job_profile.id,
+        candidate_profile_id=candidate_profile.id,
+        version_number=1,
+        status="completed",
+        score=score,
+        recommendation=recommendation,
+        explanation={"summary": "Strong match."},
+        scoring_version="1.0",
+        is_current=True,
+        completed_at=datetime.now(UTC),
+    )
+    db_session.add(evaluation)
+    db_session.flush()
+    return evaluation
+
+
+class TestApplicationList:
+    def test_list_applications_org_scoped_with_summary_fields(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, job, candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        _seed_evaluation(db_session, application, score="92.000")
+
+        other_org, other_user = bootstrap(client)
+        other_organization = db_session.get(models.Organization, uuid.UUID(other_org["id"]))
+        other_user_obj = db_session.get(models.User, uuid.UUID(other_user["id"]))
+        _seed_application_records(db_session, other_organization, other_user_obj)
+
+        resp = client.get("/api/v1/job-applications", headers=h)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["id"] == str(application.id)
+        assert row["candidate_id"] == str(candidate.id)
+        assert row["candidate_name"] == "Read Model Candidate"
+        assert row["job_id"] == str(job.id)
+        assert row["job_title"] == "Read Model Job"
+        assert row["score"] == "92.000"
+        assert row["status"] == "created"
+
+    def test_list_applications_status_filter(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        application.status = "hold"
+        db_session.flush()
+
+        resp = client.get("/api/v1/job-applications", params={"status": "hold"}, headers=h)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["status"] == "hold"
+
+        resp = client.get(
+            "/api/v1/job-applications", params={"status": "ready_for_review"}, headers=h
+        )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_applications_invalid_status_returns_422(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        resp = client.get("/api/v1/job-applications", params={"status": "bogus"}, headers=h)
+        assert resp.status_code == 422
+
+    def test_list_applications_missing_headers_returns_422(self, client: httpx.Client) -> None:
+        resp = client.get("/api/v1/job-applications")
+        assert resp.status_code == 422
+
+
+class TestReviewBundle:
+    def test_review_bundle_returns_full_shape(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        evaluation = _seed_evaluation(
+            db_session, application, score="95.000", recommendation="advance"
+        )
+        evidence = models.MatchEvidence(
+            candidate_evaluation_id=evaluation.id,
+            evidence_type="matched",
+            requirement_ref={"requirement_key": "req-python1234567890"},
+            candidate_evidence={"source": "resume", "skill": "Python"},
+            strength="strong",
+            provenance={"source": "fake"},
+        )
+        decision = models.HRDecision(
+            job_application_id=application.id,
+            user_id=user_obj.id,
+            decision="hold",
+            reason="Second opinion.",
+            candidate_evaluation_id=evaluation.id,
+        )
+        db_session.add_all([evidence, decision])
+        db_session.flush()
+
+        resp = client.get(f"/api/v1/job-applications/{application.id}/review-bundle", headers=h)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["application"]["id"] == str(application.id)
+        assert data["candidate"]["name"] == "Read Model Candidate"
+        assert data["candidate"]["email"] == "read-model@example.com"
+        assert data["job"]["title"] == "Read Model Job"
+        assert len(data["evaluations"]) == 1
+        assert data["evaluation"]["id"] == str(evaluation.id)
+        assert data["evaluation"]["score"] == "95.000"
+        assert data["evaluation"]["recommendation"] == "advance"
+        assert len(data["evidence"]) == 1
+        assert data["evidence"][0]["evidence_type"] == "matched"
+        pool_row = data["pool_row"]
+        assert pool_row["group"] == "must_review"
+        assert pool_row["score"] == "95.000"
+        assert pool_row["decision"] == "hold"
+        assert pool_row["decision_created_at"] is not None
+
+    def test_review_bundle_without_evaluation(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        resp = client.get(f"/api/v1/job-applications/{application.id}/review-bundle", headers=h)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["evaluations"] == []
+        assert data["evaluation"] is None
+        assert data["evidence"] == []
+        assert data["pool_row"]["group"] == "lower_priority"
+        assert data["pool_row"]["score"] is None
+        assert data["pool_row"]["decision"] is None
+
+    def test_review_bundle_org_mismatch_returns_422(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        other_org, other_user = bootstrap(client)
+        other_h = auth_headers(other_org["id"], other_user["id"])
+        resp = client.get(
+            f"/api/v1/job-applications/{application.id}/review-bundle", headers=other_h
+        )
+        assert resp.status_code == 422
+
+    def test_review_bundle_missing_returns_404(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        resp = client.get(f"/api/v1/job-applications/{uuid.uuid4()}/review-bundle", headers=h)
+        assert resp.status_code == 404
+
+
+class TestTriggerEvaluation:
+    def test_trigger_evaluation_creates_evaluation_and_traces(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        resp = client.post(f"/api/v1/job-applications/{application.id}/evaluations", headers=h)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["evaluation_id"] is not None
+        assert data["workflow_run_id"] is not None
+        assert data["version_number"] >= 1
+
+        workflow_runs = db_session.scalars(
+            select(models.WorkflowRun).where(
+                models.WorkflowRun.workflow_type == "candidate_evaluation"
+            )
+        ).all()
+        assert len(workflow_runs) >= 1
+
+        bundle = client.get(
+            f"/api/v1/job-applications/{application.id}/review-bundle", headers=h
+        ).json()
+        assert bundle["evaluation"] is not None
+        assert bundle["evaluation"]["id"] == data["evaluation_id"]
+        assert bundle["pool_row"]["score"] is not None
+
+    def test_evaluate_alias_still_works(self, client: httpx.Client, db_session: Session) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        resp = client.post(f"/api/v1/job-applications/{application.id}/evaluate", headers=h)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["evaluation_id"] is not None
+
+    def test_trigger_evaluation_org_mismatch_returns_422(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        other_org, other_user = bootstrap(client)
+        other_h = auth_headers(other_org["id"], other_user["id"])
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/evaluations", headers=other_h
+        )
+        assert resp.status_code == 422
+
+    def test_trigger_evaluation_missing_returns_404(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        resp = client.post(f"/api/v1/job-applications/{uuid.uuid4()}/evaluations", headers=h)
+        assert resp.status_code == 404
+
+
+class TestTalentPool:
+    def test_talent_pool_returns_hold_advanced_org_scoped(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+
+        hold_app, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        hold_app.status = "hold"
+        _seed_evaluation(db_session, hold_app, score="80.000")
+        decision = models.HRDecision(
+            job_application_id=hold_app.id,
+            user_id=user_obj.id,
+            decision="hold",
+            reason="Hold for later.",
+        )
+        db_session.add(decision)
+
+        advanced_app, _job2, _candidate2, _resume2 = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        advanced_app.status = "advanced"
+        _seed_evaluation(db_session, advanced_app, score="95.000")
+
+        rejected_app, _job3, _candidate3, _resume3 = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        rejected_app.status = "rejected"
+        db_session.flush()
+
+        other_org, other_user = bootstrap(client)
+        other_organization = db_session.get(models.Organization, uuid.UUID(other_org["id"]))
+        other_user_obj = db_session.get(models.User, uuid.UUID(other_user["id"]))
+        other_app, _job4, _candidate4, _resume4 = _seed_application_records(
+            db_session, other_organization, other_user_obj
+        )
+        other_app.status = "hold"
+        db_session.flush()
+
+        resp = client.get("/api/v1/talent-pool", headers=h)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 2
+        application_ids = {row["application_id"] for row in rows}
+        assert application_ids == {str(hold_app.id), str(advanced_app.id)}
+        hold_row = next(row for row in rows if row["application_id"] == str(hold_app.id))
+        assert hold_row["full_name"] == "Read Model Candidate"
+        assert hold_row["job_title"] == "Read Model Job"
+        assert hold_row["score"] == "80.000"
+        assert hold_row["decision"] == "hold"
+        assert hold_row["group"] == "must_review"
+
+    def test_talent_pool_empty_without_hold_advanced(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        application.status = "archived"
+        db_session.flush()
+
+        resp = client.get("/api/v1/talent-pool", headers=h)
+        assert resp.status_code == 200
+        assert resp.json() == []

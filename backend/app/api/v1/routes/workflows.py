@@ -293,7 +293,46 @@ def evaluate_candidate(
     ctx: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ):
+    result = _run_candidate_evaluation(
+        db,
+        application_id=uuid.UUID(application_id),
+        organization_id=ctx.organization_id,
+    )
+    db.commit()
+    return result
 
+
+@router.post(
+    "/job-applications/{application_id}/evaluations",
+    response_model=CandidateEvaluationRunResponse,
+    status_code=201,
+)
+def evaluate_candidate_alias(
+    application_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    """Trigger the CandidateEvaluation workflow for an application.
+
+    Thin alias of ``POST /job-applications/{application_id}/evaluate`` provided
+    as the explicit spec route. Runs the same FakeAIProvider-backed workflow and
+    returns the created evaluation identity.
+    """
+    result = _run_candidate_evaluation(
+        db,
+        application_id=uuid.UUID(application_id),
+        organization_id=ctx.organization_id,
+    )
+    db.commit()
+    return result
+
+
+def _run_candidate_evaluation(
+    db: Session,
+    *,
+    application_id: uuid.UUID,
+    organization_id: uuid.UUID,
+):
     from app.ai.providers import get_provider
     from app.ai.workflows import CandidateEvaluationWorkflow
     from app.core.config import settings
@@ -321,10 +360,8 @@ def evaluate_candidate(
         evidence_provider=evidence_provider,
         explanation_provider=explanation_provider,
     )
-    result = workflow.run(
+    return workflow.run(
         db,
-        job_application_id=uuid.UUID(application_id),
-        organization_id=ctx.organization_id,
+        job_application_id=application_id,
+        organization_id=organization_id,
     )
-    db.commit()
-    return result

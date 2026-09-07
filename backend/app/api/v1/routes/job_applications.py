@@ -1,12 +1,19 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import RequestContext, get_request_context
-from app.api.v1.schemas.job_applications import JobApplicationCreate, JobApplicationResponse
+from app.api.v1.schemas.candidate_pool import JobCandidateSummary
+from app.api.v1.schemas.job_applications import (
+    ApplicationSummaryResponse,
+    JobApplicationCreate,
+    JobApplicationResponse,
+)
+from app.api.v1.schemas.review import ReviewBundleResponse, ReviewCandidateInfo
 from app.core.database import get_db
 from app.services.job_application_service import JobApplicationService
+from app.services.review_service import ReviewService
 
 router = APIRouter()
 
@@ -37,6 +44,43 @@ def create_job_application(
 
 
 @router.get(
+    "/job-applications",
+    response_model=list[ApplicationSummaryResponse],
+)
+def list_org_applications(
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+    status: str | None = Query(default=None),
+):
+    rows = ReviewService().list_application_summaries(
+        db,
+        organization_id=ctx.organization_id,
+        status=status,
+    )
+    summaries = []
+    for row in rows:
+        evaluation = row.current_evaluation
+        score = (
+            str(evaluation.score)
+            if evaluation is not None and evaluation.score is not None
+            else None
+        )
+        summaries.append(
+            ApplicationSummaryResponse(
+                id=row.application.id,
+                candidate_id=row.candidate.id,
+                candidate_name=row.candidate.full_name,
+                job_id=row.job.id,
+                job_title=row.job.title,
+                score=score,
+                status=row.application.status,
+                created_at=row.application.created_at,
+            )
+        )
+    return summaries
+
+
+@router.get(
     "/job-applications/{application_id}",
     response_model=JobApplicationResponse,
 )
@@ -49,6 +93,52 @@ def get_job_application(
         db,
         application_id=uuid.UUID(application_id),
         organization_id=ctx.organization_id,
+    )
+
+
+@router.get(
+    "/job-applications/{application_id}/review-bundle",
+    response_model=ReviewBundleResponse,
+)
+def get_review_bundle(
+    application_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    bundle = ReviewService().get_review_bundle(
+        db,
+        application_id=uuid.UUID(application_id),
+        organization_id=ctx.organization_id,
+    )
+    current = bundle.current_evaluation
+    score = str(current.score) if current is not None and current.score is not None else None
+    decision = bundle.latest_decision
+    pool_row = JobCandidateSummary(
+        candidate_id=bundle.candidate.id,
+        application_id=bundle.application.id,
+        full_name=bundle.candidate.full_name,
+        email=bundle.candidate.email,
+        phone=bundle.candidate.phone,
+        status=bundle.application.status,
+        score=score,
+        group=bundle.group,
+        decision=decision.decision if decision else None,
+        decision_created_at=decision.created_at if decision else None,
+    )
+    candidate = ReviewCandidateInfo(
+        id=bundle.candidate.id,
+        name=bundle.candidate.full_name,
+        email=bundle.candidate.email,
+        phone=bundle.candidate.phone,
+    )
+    return ReviewBundleResponse(
+        application=bundle.application,
+        candidate=candidate,
+        job=bundle.job,
+        evaluations=bundle.evaluations,
+        evaluation=current,
+        evidence=bundle.evidence,
+        pool_row=pool_row,
     )
 
 

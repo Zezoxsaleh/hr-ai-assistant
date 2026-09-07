@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import RequestContext, get_request_context
-from app.api.v1.schemas.candidate_pool import JobCandidateSummary
+from app.api.v1.schemas.candidate_pool import JobCandidateSummary, TalentPoolRowResponse
 from app.core.database import get_db
 from app.services.candidate_pool_service import CandidatePoolService
+from app.services.review_service import ReviewService
 
 router = APIRouter()
 
@@ -64,3 +65,45 @@ def list_job_candidates(
         )
 
     return summaries
+
+
+@router.get(
+    "/talent-pool",
+    response_model=list[TalentPoolRowResponse],
+)
+def list_talent_pool(
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    rows = ReviewService().list_talent_pool(
+        db,
+        organization_id=ctx.organization_id,
+    )
+
+    talent_pool = []
+    for row in rows:
+        evaluation = row.current_evaluation
+        score = (
+            str(evaluation.score)
+            if evaluation is not None and evaluation.score is not None
+            else None
+        )
+        decision = row.latest_decision
+        talent_pool.append(
+            TalentPoolRowResponse(
+                candidate_id=row.candidate.id,
+                application_id=row.application.id,
+                job_id=row.job.id,
+                job_title=row.job.title,
+                full_name=row.candidate.full_name,
+                email=row.candidate.email,
+                phone=row.candidate.phone,
+                status=row.application.status,
+                score=score,
+                group=row.group,
+                decision=decision.decision if decision else None,
+                decision_created_at=decision.created_at if decision else None,
+            )
+        )
+
+    return talent_pool

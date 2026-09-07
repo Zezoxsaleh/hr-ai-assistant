@@ -24,3 +24,25 @@ class JobCandidateSummary(BaseModel):
     group: str
     decision: str | None = None
     decision_created_at: datetime | None = None
+
+
+class TalentPoolRowResponse(BaseModel):
+    """One hold/advanced candidate in the organization-wide talent pool.
+
+    Superset of ``JobCandidateSummary``: adds job context (``job_id``,
+    ``job_title``) so a consumer like the talent pool page can display which
+    job a hold/advanced candidate is linked to.
+    """
+
+    candidate_id: UUID
+    application_id: UUID
+    job_id: UUID
+    job_title: str
+    full_name: str
+    email: str | None = None
+    phone: str | None = None
+    status: str
+    score: str | None = None
+    group: str
+    decision: str | None = None
+    decision_created_at: datetime | None = None
