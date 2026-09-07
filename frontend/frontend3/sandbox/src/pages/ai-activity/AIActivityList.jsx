@@ -44,7 +44,10 @@ export default function AIActivityList() {
       <div className="section-head">
         <div>
           <p className="eyebrow">AI ACTIVITY</p>
-          <h3>Workflow observability — not an AI agent. These are execution traces.</h3>
+          <h3>
+            Workflow observability — not an AI agent. These are execution traces.{" "}
+            <span className="demo-notice">Demo / Placeholder</span>
+          </h3>
         </div>
         <button className="btn btn-secondary" onClick={load}>
           <RefreshCw size={16} /> Refresh

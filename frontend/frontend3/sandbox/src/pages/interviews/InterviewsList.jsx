@@ -72,7 +72,9 @@ export default function InterviewsList() {
       <div className="section-head">
         <div>
           <p className="eyebrow">INTERVIEWS</p>
-          <h3>Interviews</h3>
+          <h3>
+            Interviews <span className="demo-notice">Demo / Placeholder</span>
+          </h3>
           <p className="muted-note">{stats.thisWeek} scheduled this week</p>
         </div>
         <button className="primary" onClick={() => navigate("/interviews/schedule")}>

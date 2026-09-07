@@ -149,7 +149,9 @@ export default function ScheduleInterview() {
         <div className="panel-title">
           <div>
             <p className="eyebrow">INTERVIEW SCHEDULING</p>
-            <h3>Schedule an interview</h3>
+            <h3>
+              Schedule an interview <span className="demo-notice">Demo / Placeholder</span>
+            </h3>
           </div>
         </div>
 

@@ -114,7 +114,8 @@ export default function InterviewFeedback() {
           <div>
             <p className="eyebrow">INTERVIEW FEEDBACK</p>
             <h3>
-              {interview.candidateName} — {interview.job}
+              {interview.candidateName} — {interview.job}{" "}
+              <span className="demo-notice">Demo / Placeholder</span>
             </h3>
           </div>
         </div>
