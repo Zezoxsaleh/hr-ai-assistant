@@ -2,8 +2,8 @@ import apiClient from "./apiClient";
 
 // Resume / candidate-profile service backed by the real backend.
 // Endpoints: POST /candidates/{id}/resumes, POST /candidates/{id}/resumes/upload,
-// GET /resumes/{id}, GET /candidate-profiles/{id}, GET/POST /resumes/{id}/profiles,
-// POST /resumes/{id}/extract-profile.
+// GET /candidates/{id}/resumes, GET /resumes/{id}, GET /candidate-profiles/{id},
+// GET/POST /resumes/{id}/profiles, POST /resumes/{id}/extract-profile.
 
 export async function createResume(candidateId, payload) {
   const { data } = await apiClient.post(`/candidates/${candidateId}/resumes`, payload);
@@ -18,6 +18,11 @@ export async function uploadResume(candidateId, file) {
     timeout: 60000,
   });
   return data;
+}
+
+export async function listCandidateResumes(candidateId) {
+  const { data } = await apiClient.get(`/candidates/${candidateId}/resumes`);
+  return Array.isArray(data) ? data : [];
 }
 
 export async function getResume(resumeId) {

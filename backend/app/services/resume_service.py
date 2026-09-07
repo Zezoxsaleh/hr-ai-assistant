@@ -112,6 +112,21 @@ class ResumeService:
 
         return resume
 
+    def list_for_candidate(
+        self,
+        db: Session,
+        *,
+        candidate_id: uuid.UUID,
+        organization_id: uuid.UUID,
+    ) -> list[Resume]:
+        """Return a candidate's resumes, enforcing organization scope."""
+        candidate = db.get(Candidate, candidate_id)
+        if candidate is None:
+            raise NotFoundError("Candidate was not found.")
+        if candidate.organization_id != organization_id:
+            raise ValidationError("Candidate does not belong to the expected organization.")
+        return list(candidate.resumes)
+
     def get(
         self,
         db: Session,

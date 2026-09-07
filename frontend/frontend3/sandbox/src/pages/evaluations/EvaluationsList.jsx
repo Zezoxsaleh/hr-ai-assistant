@@ -1,19 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
+import { Search, ChevronRight } from "lucide-react";
 import ScoreBadge from "../../components/common/ScoreBadge";
 import Badge from "../../components/common/Badge";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import EmptyState from "../../components/common/EmptyState";
 import ErrorState from "../../components/common/ErrorState";
 import { getCandidates } from "../../services/candidateService";
-import { getRecommendation } from "../../utils/evaluation";
 
-// The Evaluations page is the AI-review queue: every candidate the AI has
-// scored, sorted by score, with the matched/missing skills and recommended
-// action surfaced up front — a faster triage view than the full Candidates
-// list. Clicking a row opens the same Candidate Details page (which already
-// has the full AI Evaluation section from Week 2).
+// The Evaluations page is the org-wide AI-review queue: every candidate in the
+// roster, sorted by profile availability, with their extracted profile skills
+// surfaced up front. Per-job screening scores (the backend's per-job
+// evaluations) live behind the inspected job — this page shows the org-wide
+// picture, so a score is shown only when one is available. Clicking a row
+// opens the Candidate Details page (with its AI Evaluation section).
 export default function EvaluationsList() {
   const [candidates, setCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,15 +40,20 @@ export default function EvaluationsList() {
 
   const filtered = useMemo(() => {
     return candidates
-      .filter((c) => `${c.name} ${c.title}`.toLowerCase().includes(search.toLowerCase()))
+      .filter((c) => `${c.name} ${c.skills.join(" ")}`.toLowerCase().includes(search.toLowerCase()))
       .filter((c) => {
         if (minScore === "all") return true;
+        if (c.score === null || c.score === undefined) return false;
         if (minScore === "strong") return c.score >= 85;
         if (minScore === "consider") return c.score >= 70 && c.score < 85;
         if (minScore === "weak") return c.score < 70;
         return true;
       })
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => {
+        const sa = a.score ?? -1;
+        const sb = b.score ?? -1;
+        return sb - sa || b.skills.length - a.skills.length;
+      });
   }, [candidates, search, minScore]);
 
   if (loading) return <LoadingSpinner label="Loading evaluations..." />;
@@ -73,7 +78,8 @@ export default function EvaluationsList() {
           />
         </div>
         <select value={minScore} onChange={(e) => setMinScore(e.target.value)}>
-          <option value="all">All Scores</option>
+          <option value="all">All Candidates</option>
+          <option value="scored">AI-Screened Only</option>
           <option value="strong">Strong Match (85+)</option>
           <option value="consider">Worth Reviewing (70-84)</option>
           <option value="weak">Weak Match (&lt;70)</option>
@@ -81,7 +87,7 @@ export default function EvaluationsList() {
       </div>
 
       {!filtered.length ? (
-        <EmptyState message="No evaluations match your filters." />
+        <EmptyState message="No candidates match your filters." />
       ) : (
         <div className="panel table-panel">
           <div className="table-wrap">
@@ -89,64 +95,57 @@ export default function EvaluationsList() {
               <thead>
                 <tr>
                   <th>Candidate</th>
-                  <th>Job</th>
+                  <th>Status</th>
+                  <th>Profile Skills</th>
                   <th>Experience</th>
                   <th>AI Score</th>
-                  <th>Recommendation</th>
-                  <th>Matched Skills</th>
-                  <th>Missing Skills</th>
-                  <th>Status</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c) => {
-                  const rec = getRecommendation(c.score);
-                  return (
-                    <tr key={c.id} className="clickable" onClick={() => navigate(`/candidates/${c.id}`)}>
-                      <td>
-                        <div className="candidate-cell">
-                          <div className="mini-avatar">
-                            {c.name
-                              .split(" ")
-                              .map((x) => x[0])
-                              .join("")
-                              .slice(0, 2)}
-                          </div>
-                          <div>
-                            <strong>{c.name}</strong>
-                            <span>{c.email}</span>
-                          </div>
+                {filtered.map((c) => (
+                  <tr key={c.id} className="clickable" onClick={() => navigate(`/candidates/${c.id}`)}>
+                    <td>
+                      <div className="candidate-cell">
+                        <div className="mini-avatar">
+                          {c.name
+                            .split(" ")
+                            .map((x) => x[0])
+                            .join("")
+                            .slice(0, 2)}
                         </div>
-                      </td>
-                      <td>{c.title}</td>
-                      <td>{c.experience} yrs</td>
-                      <td>
+                        <div>
+                          <strong>{c.name}</strong>
+                          <span>{c.email || "—"}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <Badge status={c.status} />
+                    </td>
+                    <td>
+                      <div className="skill-preview">
+                        {c.skills.length ? (
+                          c.skills.slice(0, 3).map((s) => <span key={s}>{s}</span>)
+                        ) : (
+                          <span className="muted-note">No profile yet</span>
+                        )}
+                        {c.skills.length > 3 && <span>+{c.skills.length - 3}</span>}
+                      </div>
+                    </td>
+                    <td>{c.experience || "—"}</td>
+                    <td>
+                      {c.score === null || c.score === undefined ? (
+                        <span className="muted-note">Not scored</span>
+                      ) : (
                         <ScoreBadge value={c.score} />
-                      </td>
-                      <td>
-                        <span className={`recommendation recommendation-${rec.tone}`}>
-                          {rec.tone === "red" ? <XCircle size={14} /> : <CheckCircle2 size={14} />}
-                          {rec.label}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="mini-count good">{c.matching.length}</span>
-                      </td>
-                      <td>
-                        <span className={`mini-count ${c.missing.length ? "bad" : "neutral"}`}>
-                          {c.missing.length}
-                        </span>
-                      </td>
-                      <td>
-                        <Badge status={c.status} />
-                      </td>
-                      <td>
-                        <ChevronRight size={17} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                      )}
+                    </td>
+                    <td>
+                      <ChevronRight size={17} />
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

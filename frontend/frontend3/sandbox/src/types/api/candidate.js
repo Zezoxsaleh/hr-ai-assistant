@@ -138,9 +138,39 @@ export const CandidatePoolGroup = Object.freeze({
  */
 
 /**
- * The backend has NO organization-wide candidate-list endpoint: candidates are
- * only reachable individually or via the job-scoped pool above. Do not model a
- * `/candidates` list operation.
- * @type {readonly ["create", "get"]}
+ * Response for the org-wide candidate roster `GET /api/v1/candidates`.
+ * Unlike `CandidateResponse`, this deliberately omits `organization_id`,
+ * `updated_at` and is the list-optimized shape the Candidates/Evaluations
+ * pages are backed by.
+ * @typedef {object} CandidateListResponse
+ * @property {import("./common.js").UUID} id
+ * @property {string} full_name
+ * @property {string} [email]
+ * @property {string} [phone]
+ * @property {CandidateStatusValue} status
+ * @property {import("./common.js").ISO8601DateTime} created_at
  */
-export const CANDIDATE_OPERATIONS = Object.freeze(["create", "get"]);
+
+/**
+ * Query parameters for `GET /api/v1/candidates`.
+ * @typedef {object} CandidateListQuery
+ * @property {string} [search]  Case-insensitive match on full_name or email.
+ * @property {CandidateStatusValue} [status]
+ */
+
+/**
+ * Request body for `PATCH /api/v1/candidates/{candidate_id}`.
+ * Only `email` and `phone` are editable today; `full_name` and `status`
+ * are managed by the screening/archiving workflows.
+ * @typedef {object} CandidateUpdate
+ * @property {string} [email]
+ * @property {string} [phone]
+ */
+
+/**
+ * The backend supports an org-wide candidate list (`GET /candidates`) in
+ * addition to single-candidate reads, contact updates (`PATCH /candidates/{id}`)
+ * and the job-scoped pool (`GET /jobs/{id}/candidates`).
+ * @type {readonly ["create", "get", "list", "update"]}
+ */
+export const CANDIDATE_OPERATIONS = Object.freeze(["create", "get", "list", "update"]);

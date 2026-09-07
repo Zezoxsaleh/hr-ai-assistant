@@ -8,13 +8,13 @@ import {
   Globe,
   ExternalLink,
   FileText,
-  CheckCircle2,
-  XCircle,
   CalendarClock,
-  FolderGit2,
+  Pencil,
+  Save,
 } from "lucide-react";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
-import { getCandidateById } from "../../services/candidateService";
+import Modal from "../../components/common/Modal";
+import { getCandidateById, updateCandidate } from "../../services/candidateService";
 
 const Info = ({ l, v }) => (
   <div className="info">
@@ -28,18 +28,59 @@ export default function CandidateDetails() {
   const navigate = useNavigate();
   const [c, setC] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [editOpen, setEditOpen] = useState(false);
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [saveOk, setSaveOk] = useState(false);
 
   useEffect(() => {
     let active = true;
-    getCandidateById(id).then((data) => {
-      if (!active) return;
-      setC(data);
-      setLoading(false);
-    });
+    getCandidateById(id)
+      .then((data) => {
+        if (!active) return;
+        setC(data);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setC(null);
+        setLoading(false);
+      });
     return () => {
       active = false;
     };
   }, [id]);
+
+  const openEdit = () => {
+    setEmail(c?.email || "");
+    setPhone(c?.phone || "");
+    setSaveError("");
+    setSaveOk(false);
+    setEditOpen(true);
+  };
+
+  const saveContact = async () => {
+    setSaving(true);
+    setSaveError("");
+    setSaveOk(false);
+    try {
+      const updated = await updateCandidate(id, {
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+      });
+      setC({ ...c, email: updated?.email || "", phone: updated?.phone || "" });
+      setSaveOk(true);
+      setEditOpen(false);
+    } catch (err) {
+      setSaveError(
+        err?.response?.data?.detail || "Could not save the candidate's contact details."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) return <LoadingSpinner label="Loading candidate..." />;
   if (!c) {
@@ -53,11 +94,8 @@ export default function CandidateDetails() {
     );
   }
 
-  const score = c.score ?? 0;
-  const matching = c.matching || [];
-  const missing = c.missing || [];
-  const strengths = c.strengths || [];
-  const projects = c.projects || [];
+  const skills = c.skills || [];
+  const score = c.score;
 
   return (
     <section>
@@ -77,16 +115,38 @@ export default function CandidateDetails() {
           </div>
           <div>
             <span className="pill">
-              <Sparkles size={13} /> AI Screening
+              <Sparkles size={13} /> Candidate Profile
             </span>
             <h2>{c.name}</h2>
-            <p>{c.title}</p>
+            <p>{c.summary || c.title || "Profile extracted from resume"}</p>
+            <div className="links">
+              {c.linkedin && (
+                <a href={c.linkedin} target="_blank" rel="noreferrer">
+                  <LinkIcon size={16} /> LinkedIn <ExternalLink size={13} />
+                </a>
+              )}
+              {c.github && (
+                <a href={c.github} target="_blank" rel="noreferrer">
+                  <Link2 size={16} /> GitHub <ExternalLink size={13} />
+                </a>
+              )}
+              {c.portfolio && (
+                <a href={c.portfolio} target="_blank" rel="noreferrer">
+                  <Globe size={16} /> Portfolio <ExternalLink size={13} />
+                </a>
+              )}
+              {c.cv && (
+                <a href={c.cv} target="_blank" rel="noreferrer">
+                  <FileText size={16} /> Resume <ExternalLink size={13} />
+                </a>
+              )}
+            </div>
           </div>
         </div>
         <div className="detail-hero-actions">
           <div className="big-score">
-            <strong>{score}%</strong>
-            <span>Overall Score</span>
+            <strong>{score === null || score === undefined ? "—" : `${score}%`}</strong>
+            <span>Match Score</span>
           </div>
           <Link className="primary" to="/interviews/schedule" state={{ candidate: c }}>
             <CalendarClock size={17} /> Schedule Interview
@@ -96,48 +156,30 @@ export default function CandidateDetails() {
 
       <div className="detail-grid">
         <div className="panel">
-          <h3>Candidate Profile</h3>
+          <div className="panel-title">
+            <div>
+              <p className="eyebrow">CONTACT</p>
+              <h3>Candidate Details</h3>
+            </div>
+            <button className="btn-secondary" onClick={openEdit}>
+              <Pencil size={15} /> Edit
+            </button>
+          </div>
           <Info l="Email" v={c.email} />
           <Info l="Phone" v={c.phone} />
-          <Info l="Education" v={c.education} />
-          <Info l="Experience" v={`${c.experience} years`} />
+          <Info l="Experience" v={c.experience} />
 
-          <h4>Projects</h4>
-          {projects.length ? (
-            <div className="project-list">
-              {projects.map((p) => (
-                <div className="project-item" key={p.name}>
-                  <FolderGit2 size={16} />
-                  <div>
-                    <strong>{p.name}</strong>
-                    <span>{p.description}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="muted-note">No projects listed.</p>
-          )}
-
-          <div className="links">
-            {c.linkedin && (
-              <a href={c.linkedin} target="_blank" rel="noreferrer">
-                <LinkIcon size={16} /> LinkedIn <ExternalLink size={13} />
-              </a>
+          <h4>Skills</h4>
+          <div className="chips">
+            {skills.length ? (
+              skills.map((s) => (
+                <span className="chip good" key={s}>
+                  {s}
+                </span>
+              ))
+            ) : (
+              <span className="none">No extracted profile skills yet.</span>
             )}
-            {c.github && (
-              <a href={c.github} target="_blank" rel="noreferrer">
-                <Link2 size={16} /> GitHub <ExternalLink size={13} />
-              </a>
-            )}
-            {c.portfolio && (
-              <a href={c.portfolio} target="_blank" rel="noreferrer">
-                <Globe size={16} /> Portfolio <ExternalLink size={13} />
-              </a>
-            )}
-            <a href={c.cv} target="_blank" rel="noreferrer">
-              <FileText size={16} /> Resume <ExternalLink size={13} />
-            </a>
           </div>
         </div>
 
@@ -150,55 +192,51 @@ export default function CandidateDetails() {
 
           <div className="overall-score-row">
             <span>Overall Score</span>
-            <strong>{score}%</strong>
+            <strong>{score === null || score === undefined ? "—" : `${score}%`}</strong>
           </div>
           <div className="score-track">
-            <i style={{ width: `${score}%` }} />
+            <i style={{ width: `${score ?? 0}%` }} />
           </div>
-
-          <h4>Matched Skills</h4>
-          <div className="chips">
-            {matching.map((s) => (
-              <span className="chip good" key={s}>
-                <CheckCircle2 size={14} />
-                {s}
-              </span>
-            ))}
-            {!matching.length && <span className="none">No AI-screened skills recorded.</span>}
-          </div>
-
-          <h4>Missing Skills</h4>
-          <div className="chips">
-            {missing.length ? (
-              missing.map((s) => (
-                <span className="chip bad" key={s}>
-                  <XCircle size={14} />
-                  {s}
-                </span>
-              ))
-            ) : (
-              <span className="none">None 🎉</span>
-            )}
-          </div>
-
-          {strengths.length > 0 && (
-            <>
-              <h4>Strengths</h4>
-              <ul className="strengths-list">
-                {strengths.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ul>
-            </>
-          )}
 
           <h4>AI Explanation</h4>
           <p className="ai-explanation">
             {c.reason ||
-              "No AI screening has run for this candidate yet. Screening results (score, matched/missing skills, strengths, explanation) appear here once an evaluation is produced by the backend."}
+              "Screening runs against a specific job. Once a candidate is screened (per job), the score, matched/missing skills, and explanation appear here."}
           </p>
         </div>
       </div>
+
+      {/* ===== Edit Contact Modal ===== */}
+      <Modal open={editOpen} title="Edit contact details" onClose={() => setEditOpen(false)}>
+        <label>
+          Email
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="person@company.com"
+          />
+        </label>
+        <label>
+          Phone
+          <input
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+1 (555) 000-0000"
+          />
+        </label>
+        {saveError && <div className="form-error">{saveError}</div>}
+        {saveOk && <div className="form-success">Contact details saved.</div>}
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={() => setEditOpen(false)}>
+            Cancel
+          </button>
+          <button className="primary" onClick={saveContact} disabled={saving}>
+            <Save size={16} /> {saving ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </Modal>
     </section>
   );
 }

@@ -312,6 +312,156 @@ class TestCandidates:
         resp = client.get(f"/api/v1/candidates/{cand['id']}", headers=h2)
         assert resp.status_code == 422
 
+    def test_list_candidates_returns_only_org_candidates(self, client: httpx.Client) -> None:
+        org1, user1 = bootstrap(client)
+        org2, user2 = bootstrap(client)
+        h1 = auth_headers(org1["id"], user1["id"])
+        h2 = auth_headers(org2["id"], user2["id"])
+
+        for name in ("Alice", "Bob"):
+            resp = client.post("/api/v1/candidates", json={"full_name": name}, headers=h1)
+            assert resp.status_code == 201
+        client.post("/api/v1/candidates", json={"full_name": "Carol"}, headers=h2)
+
+        resp = client.get("/api/v1/candidates", headers=h1)
+        assert resp.status_code == 200
+        names = {c["full_name"] for c in resp.json()}
+        assert names == {"Alice", "Bob"}
+
+    def test_list_candidates_search(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        client.post(
+            "/api/v1/candidates",
+            json={"full_name": "Alice Wong", "email": "alice@test.com"},
+            headers=h,
+        )
+        client.post(
+            "/api/v1/candidates",
+            json={"full_name": "Bob Smith", "email": "bob@test.com"},
+            headers=h,
+        )
+
+        resp = client.get("/api/v1/candidates", params={"search": "alice"}, headers=h)
+        assert resp.status_code == 200
+        assert [c["full_name"] for c in resp.json()] == ["Alice Wong"]
+
+        resp = client.get("/api/v1/candidates", params={"search": "bob@test.com"}, headers=h)
+        assert resp.status_code == 200
+        assert [c["full_name"] for c in resp.json()] == ["Bob Smith"]
+
+        resp = client.get("/api/v1/candidates", params={"search": "zzz"}, headers=h)
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_list_candidate_resumes(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        cand = client.post("/api/v1/candidates", json={"full_name": "Fay"}, headers=h).json()
+        client.post(
+            f"/api/v1/candidates/{cand['id']}/resumes",
+            json={"file_uri": "local://one.pdf", "original_filename": "one.pdf"},
+            headers=h,
+        )
+        client.post(
+            f"/api/v1/candidates/{cand['id']}/resumes",
+            json={"file_uri": "local://two.pdf", "original_filename": "two.pdf"},
+            headers=h,
+        )
+
+        resp = client.get(f"/api/v1/candidates/{cand['id']}/resumes", headers=h)
+        assert resp.status_code == 200
+        names = {r["original_filename"] for r in resp.json()}
+        assert names == {"one.pdf", "two.pdf"}
+
+    def test_list_candidate_resumes_cross_org(self, client: httpx.Client) -> None:
+        org1, user1 = bootstrap(client)
+        org2, user2 = bootstrap(client)
+        h1 = auth_headers(org1["id"], user1["id"])
+        h2 = auth_headers(org2["id"], user2["id"])
+
+        cand = client.post("/api/v1/candidates", json={"full_name": "Gia"}, headers=h1).json()
+        client.post(
+            f"/api/v1/candidates/{cand['id']}/resumes",
+            json={"file_uri": "local://one.pdf"},
+            headers=h1,
+        )
+
+        resp = client.get(f"/api/v1/candidates/{cand['id']}/resumes", headers=h2)
+        assert resp.status_code == 422
+
+    def test_list_candidate_resumes_not_found(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.get(f"/api/v1/candidates/{uuid.uuid4()}/resumes", headers=h)
+        assert resp.status_code == 404
+
+    def test_list_candidates_invalid_status_filter(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.get("/api/v1/candidates", params={"status": "bogus"}, headers=h)
+        assert resp.status_code == 422
+
+    def test_update_candidate(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.post(
+            "/api/v1/candidates",
+            json={"full_name": "Dana", "email": "dana@test.com"},
+            headers=h,
+        )
+        cand = resp.json()
+
+        resp = client.patch(
+            f"/api/v1/candidates/{cand['id']}",
+            json={"phone": "555-0100"},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        updated = resp.json()
+        assert updated["email"] == "dana@test.com"
+        assert updated["phone"] == "555-0100"
+
+        resp = client.patch(
+            f"/api/v1/candidates/{cand['id']}",
+            json={"email": "new@test.com"},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "new@test.com"
+
+    def test_update_candidate_not_found(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resp = client.patch(
+            f"/api/v1/candidates/{uuid.uuid4()}",
+            json={"email": "x@test.com"},
+            headers=h,
+        )
+        assert resp.status_code == 404
+
+    def test_update_candidate_cross_org_isolation(self, client: httpx.Client) -> None:
+        org1, user1 = bootstrap(client)
+        org2, user2 = bootstrap(client)
+        h1 = auth_headers(org1["id"], user1["id"])
+        h2 = auth_headers(org2["id"], user2["id"])
+
+        resp = client.post("/api/v1/candidates", json={"full_name": "Eve"}, headers=h1)
+        cand = resp.json()
+
+        resp = client.patch(
+            f"/api/v1/candidates/{cand['id']}",
+            json={"email": "eve@other.com"},
+            headers=h2,
+        )
+        assert resp.status_code == 422
+
 
 # ---------------------------------------------------------------------------
 # Resumes

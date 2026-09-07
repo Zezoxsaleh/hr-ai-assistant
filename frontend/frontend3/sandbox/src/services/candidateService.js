@@ -1,9 +1,12 @@
 import apiClient from "./apiClient";
+import { listCandidateProfiles, listCandidateResumes } from "./resumeService";
 
 // Candidate service. Contract: src/types/api/candidate.js.
 //
-// The backend has no org-wide candidate list, so the list is backed by the
-// job-scoped candidate pool (GET /jobs/{id}/candidates). Single-candidate
+// The list is backed by the org-wide roster (GET /candidates) and enriched
+// client-side from each candidate's latest current Candidate Profile where
+// one exists. A job-scoped pool variant (GET /jobs/{id}/candidates, the only
+// source of per-job scores) is kept for the talent pool. Single-candidate
 // reads hit GET /candidates/{id}.
 
 // Maps a JobCandidateSummary (pool row) onto the candidate display model.
@@ -44,38 +47,95 @@ function adaptFromBackend(c) {
     status: c.status,
     title: "",
     skills: [],
-    score: 0,
+    score: null, // no org-wide score; per-job scores come from the pool
     matching: [],
     missing: [],
     strengths: [],
     reason: "",
     projects: [],
     education: "",
+    experience: "",
+    summary: "",
     lastInteraction: "",
     appliedAt: c.created_at,
   };
 }
 
-// `params` become the backend CandidatePoolQuery: status, search, group,
-// decision, min_score, max_score.
-export async function getCandidates(params = {}) {
-  const jobId = params.jobId || import.meta.env.VITE_DEMO_JOB_ID;
-  if (!jobId) {
-    throw new Error("Set VITE_DEMO_JOB_ID to load the job candidate pool.");
+// Fold a CandidateProfile's profile_data into the display model. Only fields
+// the extraction schema produces (skills, experience, summary) are mapped;
+// everything else keeps its "not provided" default.
+function applyProfile(row, profile) {
+  if (!profile) return row;
+  const d = profile.profile_data || {};
+  const skills = Array.isArray(d.skills) ? d.skills : [];
+  const experience = Array.isArray(d.experience) ? d.experience : [];
+  return {
+    ...row,
+    summary: typeof d.summary === "string" ? d.summary : row.summary,
+    skills,
+    matching: skills,
+    experience: experience.length ? `${experience.length} positions` : row.experience,
+    education: typeof d.education === "string" ? d.education : row.education,
+  };
+}
+
+// Find a candidate's latest current Candidate Profile (newest resume wins).
+async function latestProfileFor(candidateId) {
+  const resumes = await listCandidateResumes(candidateId);
+  if (!resumes.length) return null;
+  const ordered = resumes.slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  for (const resume of ordered) {
+    const profiles = await listCandidateProfiles(resume.id);
+    const current =
+      profiles.find((p) => p.is_current) ||
+      profiles.find((p) => p.status === "current");
+    if (current) return current;
   }
+  return null;
+}
+
+// `params` become the org-wide query: status, search. Passing `jobId` instead
+// selects the job-scoped CandidatePoolQuery (status, search, group, decision,
+// min_score, max_score).
+export async function getCandidates(params = {}) {
+  if (params.jobId) {
+    const query = {};
+    if (params.status) query.status = params.status;
+    if (params.decision) query.decision = params.decision;
+    if (params.group) query.group = params.group;
+    if (params.search) query.search = params.search;
+    if (params.min_score !== undefined) query.min_score = params.min_score;
+    if (params.max_score !== undefined) query.max_score = params.max_score;
+    const { data } = await apiClient.get(`/jobs/${params.jobId}/candidates`, { params: query });
+    return (Array.isArray(data) ? data : []).map(mapPoolRowToCandidate);
+  }
+
   const query = {};
-  if (params.status) query.status = params.status;
-  if (params.decision) query.decision = params.decision;
-  if (params.group) query.group = params.group;
   if (params.search) query.search = params.search;
-  if (params.min_score !== undefined) query.min_score = params.min_score;
-  if (params.max_score !== undefined) query.max_score = params.max_score;
-  const { data } = await apiClient.get(`/jobs/${jobId}/candidates`, { params: query });
-  return (Array.isArray(data) ? data : []).map(mapPoolRowToCandidate);
+  if (params.status) query.status = params.status;
+  const { data } = await apiClient.get("/candidates", { params: query });
+  const rows = (Array.isArray(data) ? data : []).map(adaptFromBackend);
+  return Promise.all(
+    rows.map(async (row) => {
+      try {
+        return applyProfile(row, await latestProfileFor(row.id));
+      } catch (_err) {
+        return row;
+      }
+    })
+  );
 }
 
 export async function getCandidateById(id) {
   const { data } = await apiClient.get(`/candidates/${id}`);
+  return applyProfile(adaptFromBackend(data), await latestProfileFor(id));
+}
+
+export async function updateCandidate(id, { email, phone } = {}) {
+  const body = {};
+  if (email !== undefined) body.email = email;
+  if (phone !== undefined) body.phone = phone;
+  const { data } = await apiClient.patch(`/candidates/${id}`, body);
   return adaptFromBackend(data);
 }
 

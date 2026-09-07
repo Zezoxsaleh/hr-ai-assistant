@@ -7,16 +7,14 @@ import LoadingSpinner from "../../components/common/LoadingSpinner";
 import EmptyState from "../../components/common/EmptyState";
 import ErrorState from "../../components/common/ErrorState";
 import { getCandidates } from "../../services/candidateService";
-import { JobApplicationStatus } from "../../types/api";
+import { CandidateStatus } from "../../types/api";
 
-// Display labels for the backend's application status vocabulary (the pool's
-// status field). The filter dropdown uses the same values the API returns.
+// Display labels for the org-wide roster's status vocabulary (the Candidate
+// model's active/archived status). The filter dropdown uses the same values
+// the API returns.
 const STATUS_OPTIONS = [
-  { value: JobApplicationStatus.CREATED, label: "Created" },
-  { value: JobApplicationStatus.READY_FOR_REVIEW, label: "Ready for Review" },
-  { value: JobApplicationStatus.HOLD, label: "Hold" },
-  { value: JobApplicationStatus.ADVANCED, label: "Advanced" },
-  { value: JobApplicationStatus.REJECTED, label: "Rejected" },
+  { value: CandidateStatus.ACTIVE, label: "Active" },
+  { value: CandidateStatus.ARCHIVED, label: "Archived" },
 ];
 
 const PAGE_SIZE = 5;
@@ -27,7 +25,7 @@ export default function CandidatesList() {
   const [error, setError] = useState(false);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
-  const [sort, setSort] = useState("score");
+  const [sort, setSort] = useState("date");
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
 
@@ -56,10 +54,17 @@ export default function CandidatesList() {
   const filtered = useMemo(() => {
     let list = candidates.filter(
       (c) =>
-        `${c.name} ${c.title} ${c.email}`.toLowerCase().includes(search.toLowerCase()) &&
+        `${c.name} ${c.email} ${c.skills.join(" ")}`
+          .toLowerCase()
+          .includes(search.toLowerCase()) &&
         (status === "all" || c.status === status)
     );
-    return list.sort((a, b) => (sort === "score" ? b.score - a.score : a.name.localeCompare(b.name)));
+    return list.sort((a, b) => {
+      if (sort === "date") {
+        return new Date(b.appliedAt || 0) - new Date(a.appliedAt || 0);
+      }
+      return a.name.localeCompare(b.name);
+    });
   }, [candidates, search, status, sort]);
 
   const paged = useMemo(() => {
@@ -100,7 +105,7 @@ export default function CandidatesList() {
           ))}
         </select>
         <select value={sort} onChange={(e) => setSort(e.target.value)}>
-          <option value="score">Highest Score</option>
+          <option value="date">Newest First</option>
           <option value="name">Name</option>
         </select>
       </div>
@@ -115,11 +120,10 @@ export default function CandidatesList() {
                 <thead>
                   <tr>
                     <th>Candidate</th>
-                    <th>Job</th>
-                    <th>Match</th>
                     <th>Status</th>
+                    <th>Profile Skills</th>
                     <th>Experience</th>
-                    <th>Skills</th>
+                    <th>Added</th>
                     <th />
                   </tr>
                 </thead>
@@ -137,31 +141,25 @@ export default function CandidatesList() {
                           </div>
                           <div>
                             <strong>{c.name}</strong>
-                            <span>{c.email}</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td>{c.title}</td>
-                      <td>
-                        <div className="score">
-                          <strong>{c.score}%</strong>
-                          <div>
-                            <i style={{ width: `${c.score}%` }} />
+                            <span>{c.email || "—"}</span>
                           </div>
                         </div>
                       </td>
                       <td>
                         <Badge status={c.status} />
                       </td>
-                      <td>{c.experience} yrs</td>
                       <td>
                         <div className="skill-preview">
-                          {c.matching.slice(0, 3).map((s) => (
-                            <span key={s}>{s}</span>
-                          ))}
-                          {c.matching.length > 3 && <span>+{c.matching.length - 3}</span>}
+                          {c.skills.length ? (
+                            c.skills.slice(0, 3).map((s) => <span key={s}>{s}</span>)
+                          ) : (
+                            <span className="muted-note">No profile yet</span>
+                          )}
+                          {c.skills.length > 3 && <span>+{c.skills.length - 3}</span>}
                         </div>
                       </td>
+                      <td>{c.experience || "—"}</td>
+                      <td>{c.appliedAt ? new Date(c.appliedAt).toLocaleDateString() : "—"}</td>
                       <td>
                         <ChevronRight size={17} />
                       </td>
