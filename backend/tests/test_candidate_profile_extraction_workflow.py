@@ -1,3 +1,4 @@
+import os
 import uuid
 
 import pytest
@@ -8,8 +9,10 @@ from app.ai.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from app.ai.providers.factory import get_provider
 from app.ai.providers.fake import FakeAIProvider
 from app.ai.workflows import CandidateProfileExtractionWorkflow
+from app.core.config import Settings
 from app.models import (
     AITrace,
     Candidate,
@@ -424,3 +427,135 @@ def test_no_raw_resume_text_in_ai_trace(db_session: Session) -> None:
     assert not hasattr(trace, "raw_text")
     assert not hasattr(trace, "raw_prompt")
     assert not hasattr(trace, "full_output")
+
+
+# --------------------------------------------------------------------------- #
+# GeminiProvider (real provider, optional)
+#
+# These tests exercise the workflow against the real Gemini adapter selected
+# through the provider factory. They only run when a GEMINI_API_KEY is present;
+# otherwise they skip gracefully so CI and fresh environments stay green. Marked
+# ``gemini`` so operators can opt-in explicitly with ``pytest -m gemini``.
+# --------------------------------------------------------------------------- #
+
+
+def _make_gemini_provider() -> tuple[CandidateProfileExtractionWorkflow, str]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        pytest.skip("GEMINI_API_KEY is not set; skipping real Gemini provider tests.")
+    settings = Settings(
+        ai_provider="gemini",
+        gemini_api_key=api_key,
+        gemini_model="gemini-1.5-flash",
+    )
+    provider = get_provider(settings)
+    return CandidateProfileExtractionWorkflow(provider), api_key
+
+
+@pytest.mark.gemini
+class TestGeminiProviderExtraction:
+    def test_success_creates_profile_and_traces(self, db_session: Session) -> None:
+        organization = create_organization(db_session)
+        candidate = create_candidate(db_session, organization)
+        resume = create_resume(db_session, candidate)
+        workflow, _ = _make_gemini_provider()
+        db_session.commit()
+
+        result = workflow.run(
+            db_session,
+            resume_id=resume.id,
+            organization_id=organization.id,
+            resume_text=RESUME_TEXT,
+        )
+        db_session.commit()
+
+        profile = db_session.get(CandidateProfile, result.profile_id)
+        trace = db_session.get(AITrace, result.ai_trace_id)
+        assert result.version_number == 1
+        assert profile.source == "ai_extracted"
+        assert profile.status == "extracted"
+        assert profile.is_current is True
+        assert profile.profile_data["full_name"]
+        assert profile.provenance["provider"] == "google"
+        assert profile.provenance["model"] == "gemini-1.5-flash"
+        assert trace.status == "succeeded"
+        assert trace.provider == "google"
+        assert trace.model_name == "gemini-1.5-flash"
+        assert trace.input_reference["entity"] == "resume"
+        assert trace.input_reference["entity_id"] == str(resume.id)
+        assert trace.input_reference["resume_text_sha256"] == _resume_hash()
+        assert set(trace.output_reference) == {"output_sha256"}
+
+    def test_reprocessing_creates_new_version_and_rotates_current(
+        self, db_session: Session
+    ) -> None:
+        organization = create_organization(db_session)
+        candidate = create_candidate(db_session, organization)
+        resume = create_resume(db_session, candidate)
+        workflow, _ = _make_gemini_provider()
+        db_session.commit()
+
+        first = workflow.run(
+            db_session,
+            resume_id=resume.id,
+            organization_id=organization.id,
+            resume_text=RESUME_TEXT,
+        )
+        db_session.commit()
+        second = workflow.run(
+            db_session,
+            resume_id=resume.id,
+            organization_id=organization.id,
+            resume_text=RESUME_TEXT,
+        )
+        db_session.commit()
+
+        first_profile = db_session.get(CandidateProfile, first.profile_id)
+        second_profile = db_session.get(CandidateProfile, second.profile_id)
+        db_session.refresh(first_profile)
+        db_session.refresh(second_profile)
+
+        assert first_profile.version_number == 1
+        assert second_profile.version_number == 2
+        assert first_profile.is_current is False
+        assert second_profile.is_current is True
+
+    def test_missing_resume_fails_before_any_trace(self, db_session: Session) -> None:
+        organization = create_organization(db_session)
+        create_candidate(db_session, organization)
+        workflow, _ = _make_gemini_provider()
+        db_session.commit()
+
+        with pytest.raises(ValidationError, match="Resume was not found"):
+            workflow.run(
+                db_session,
+                resume_id=uuid.uuid4(),
+                organization_id=organization.id,
+                resume_text=RESUME_TEXT,
+            )
+        db_session.commit()
+
+        assert count_rows(db_session, WorkflowRun) == 0
+        assert count_rows(db_session, AITrace) == 0
+
+    def test_organization_mismatch_fails_before_any_trace(self, db_session: Session) -> None:
+        organization_a = create_organization(db_session)
+        organization_b = Organization(name="Other Org")
+        db_session.add(organization_b)
+        db_session.flush()
+        candidate_in_b = create_candidate(db_session, organization_b)
+        resume_in_b = create_resume(db_session, candidate_in_b)
+        workflow, _ = _make_gemini_provider()
+        db_session.commit()
+
+        with pytest.raises(ValidationError, match="different organization"):
+            workflow.run(
+                db_session,
+                resume_id=resume_in_b.id,
+                organization_id=organization_a.id,
+                resume_text=RESUME_TEXT,
+            )
+        db_session.commit()
+
+        assert count_rows(db_session, WorkflowRun) == 0
+        assert count_rows(db_session, AITrace) == 0

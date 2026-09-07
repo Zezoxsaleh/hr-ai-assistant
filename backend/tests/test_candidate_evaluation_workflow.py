@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -11,8 +12,10 @@ from app.ai.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
+from app.ai.providers.factory import get_provider
 from app.ai.providers.fake import FakeAIProvider
 from app.ai.workflows import CandidateEvaluationWorkflow
+from app.core.config import Settings
 from app.models import (
     AITrace,
     Candidate,
@@ -1083,3 +1086,116 @@ def test_reevaluation_does_not_accumulate_duplicate_evidence(db_session: Session
         assert len(rows) == 2
         keys = {row.requirement_ref["requirement_key"] for row in rows}
         assert len(keys) == 2
+
+
+# --------------------------------------------------------------------------- #
+# GeminiProvider (real provider, optional)
+#
+# These tests exercise the workflow against real Gemini adapters selected
+# through the provider factory. They only run when a GEMINI_API_KEY is present;
+# otherwise they skip gracefully so CI and fresh environments stay green. Marked
+# ``gemini`` so operators can opt in explicitly with ``pytest -m gemini``.
+# --------------------------------------------------------------------------- #
+
+
+def _make_gemini_workflow() -> tuple[CandidateEvaluationWorkflow, str]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        pytest.skip("GEMINI_API_KEY is not set; skipping real Gemini provider tests.")
+    settings = Settings(
+        ai_provider="gemini",
+        gemini_api_key=api_key,
+        gemini_model="gemini-1.5-flash",
+    )
+    evidence_provider = get_provider(settings)
+    explanation_provider = get_provider(settings)
+    return (
+        CandidateEvaluationWorkflow(
+            evidence_provider=evidence_provider,
+            explanation_provider=explanation_provider,
+        ),
+        api_key,
+    )
+
+
+@pytest.mark.gemini
+class TestGeminiProviderEvaluation:
+    def test_success_creates_evaluation_and_match_evidence(self, db_session: Session) -> None:
+        organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+            db_session
+        )
+        workflow, _ = _make_gemini_workflow()
+
+        result = workflow.run(
+            db_session,
+            job_application_id=application.id,
+            organization_id=organization.id,
+        )
+        db_session.commit()
+
+        evaluation = db_session.get(CandidateEvaluation, result.evaluation_id)
+        run = db_session.get(WorkflowRun, result.workflow_run_id)
+        step = db_session.get(WorkflowStepTrace, result.workflow_step_trace_id)
+        evidence_trace = db_session.get(AITrace, result.evidence_ai_trace_id)
+        explanation_trace = db_session.get(AITrace, result.explanation_ai_trace_id)
+
+        assert evaluation.status == "completed"
+        assert evaluation.job_application_id == application.id
+        assert evaluation.explanation is not None
+        assert evaluation.provenance["provider"] == "google"
+        assert evaluation.provenance["model"] == "gemini-1.5-flash"
+        assert run.status == "completed"
+        assert step.status == "completed"
+        assert step.step_name == "evaluate_candidate"
+        assert evidence_trace.status == "succeeded"
+        assert evidence_trace.provider == "google"
+        assert explanation_trace.status == "succeeded"
+        assert evidence_trace.input_reference["entity"] == "job_application"
+
+    def test_reevaluation_creates_distinct_versions(self, db_session: Session) -> None:
+        organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+            db_session
+        )
+        workflow, _ = _make_gemini_workflow()
+
+        first = workflow.run(
+            db_session,
+            job_application_id=application.id,
+            organization_id=organization.id,
+        )
+        db_session.commit()
+        second = workflow.run(
+            db_session,
+            job_application_id=application.id,
+            organization_id=organization.id,
+        )
+        db_session.commit()
+
+        first_eval = db_session.get(CandidateEvaluation, first.evaluation_id)
+        second_eval = db_session.get(CandidateEvaluation, second.evaluation_id)
+        db_session.refresh(first_eval)
+        db_session.refresh(second_eval)
+
+        assert first_eval.version_number == 1
+        assert second_eval.version_number == 2
+        assert first_eval.is_current is False
+        assert second_eval.is_current is True
+
+    def test_missing_job_application_fails_before_any_trace(self, db_session: Session) -> None:
+        organization, _user, _application, _job_profile, _candidate_profile = create_parent_records(
+            db_session
+        )
+        workflow, _ = _make_gemini_workflow()
+
+        with pytest.raises(NotFoundError, match="JobApplication was not found"):
+            workflow.run(
+                db_session,
+                job_application_id=uuid.uuid4(),
+                organization_id=organization.id,
+            )
+        db_session.commit()
+
+        assert count_rows(db_session, WorkflowRun) == 0
+        assert count_rows(db_session, AITrace) == 0
+        assert count_rows(db_session, CandidateEvaluation) == 0
+        assert count_rows(db_session, MatchEvidence) == 0

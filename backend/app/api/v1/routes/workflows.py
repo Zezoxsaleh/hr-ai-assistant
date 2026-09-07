@@ -28,10 +28,11 @@ def extract_job_profile(
     db: Session = Depends(get_db),
 ):
 
-    from app.ai.providers.fake import FakeAIProvider
+    from app.ai.providers import get_provider
     from app.ai.workflows import JobProfileExtractionWorkflow
+    from app.core.config import settings
 
-    provider = FakeAIProvider(provider="fake", model="fake-model")
+    provider = get_provider(settings, provider="fake", model="fake-model")
     workflow = JobProfileExtractionWorkflow(provider)
     result = workflow.run(db, job_id=uuid.UUID(job_id), organization_id=ctx.organization_id)
     db.commit()
@@ -57,7 +58,7 @@ def screen_candidates(
     is extracted and approved once on first use so the evaluation has an
     approved baseline to score against.
     """
-    from app.ai.providers.fake import FakeAIProvider
+    from app.ai.providers import get_provider
     from app.ai.workflows import (
         CandidateEvaluationWorkflow,
         CandidateProfileExtractionWorkflow,
@@ -85,7 +86,8 @@ def screen_candidates(
             approved_profile = profile
 
     if approved_profile is None:
-        extractor = FakeAIProvider(
+        extractor = get_provider(
+            settings,
             provider="fake",
             model="fake-model",
             structured_payload={
@@ -148,7 +150,8 @@ def screen_candidates(
             max_upload_bytes=settings.max_upload_bytes,
             storage=storage,
         )
-        profile_extractor = FakeAIProvider(
+        profile_extractor = get_provider(
+            settings,
             provider="fake",
             model="fake-model",
             structured_payload={
@@ -172,7 +175,8 @@ def screen_candidates(
             resume_id=resume.id,
         )
         result = CandidateEvaluationWorkflow(
-            evidence_provider=FakeAIProvider(
+            evidence_provider=get_provider(
+                settings,
                 provider="fake",
                 model="fake-evidence-model",
                 structured_payload={
@@ -180,7 +184,8 @@ def screen_candidates(
                     "schema_version": "1.2",
                 },
             ),
-            explanation_provider=FakeAIProvider(
+            explanation_provider=get_provider(
+                settings,
                 provider="fake",
                 model="fake-explanation-model",
                 structured_payload={
@@ -241,8 +246,9 @@ def extract_candidate_profile(
     db: Session = Depends(get_db),
 ):
 
-    from app.ai.providers.fake import FakeAIProvider
+    from app.ai.providers import get_provider
     from app.ai.workflows import CandidateProfileExtractionWorkflow
+    from app.core.config import settings
     from app.services.resume_service import ResumeService
 
     resume_uuid = uuid.UUID(resume_id)
@@ -255,7 +261,8 @@ def extract_candidate_profile(
     else:
         resume_text = body.resume_text
 
-    provider = FakeAIProvider(
+    provider = get_provider(
+        settings,
         provider="fake",
         model="fake-model",
         structured_payload={
@@ -287,10 +294,12 @@ def evaluate_candidate(
     db: Session = Depends(get_db),
 ):
 
-    from app.ai.providers.fake import FakeAIProvider
+    from app.ai.providers import get_provider
     from app.ai.workflows import CandidateEvaluationWorkflow
+    from app.core.config import settings
 
-    evidence_provider = FakeAIProvider(
+    evidence_provider = get_provider(
+        settings,
         provider="fake",
         model="fake-evidence-model",
         structured_payload={
@@ -298,7 +307,8 @@ def evaluate_candidate(
             "schema_version": "1.2",
         },
     )
-    explanation_provider = FakeAIProvider(
+    explanation_provider = get_provider(
+        settings,
         provider="fake",
         model="fake-explanation-model",
         structured_payload={

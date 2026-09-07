@@ -1,7 +1,7 @@
 """Provider implementations.
 
-Phase 3.3 ships only the deterministic ``FakeAIProvider``; real provider
-adapters are intentionally deferred to a later phase.
+Phase 3.3 ships the deterministic ``FakeAIProvider``; ``GeminiProvider`` adds a
+real Google Gemini adapter via LangChain, selected through ``get_provider``.
 """
 
 from app.ai.providers.base import (
@@ -17,11 +17,14 @@ from app.ai.providers.errors import (
     ProviderUnavailableError,
     provider_error_for,
 )
+from app.ai.providers.factory import get_provider
 from app.ai.providers.fake import FakeAIProvider
+from app.ai.providers.gemini import GeminiProvider
 
 __all__ = [
     "AIProvider",
     "FakeAIProvider",
+    "GeminiProvider",
     "ProviderError",
     "ProviderInvalidRequestError",
     "ProviderRateLimitError",
@@ -29,5 +32,6 @@ __all__ = [
     "ProviderUnavailableError",
     "StructuredGenerationRequest",
     "TextGenerationRequest",
+    "get_provider",
     "provider_error_for",
 ]
