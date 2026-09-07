@@ -1,20 +1,12 @@
 import apiClient from "./apiClient";
-import { getApplicationById, evaluateApplication, createDecision } from "./applicationService";
-import { getEvaluationById, getEvaluationEvidence, listEvaluationsByApplication } from "./evaluationsService";
-import { getJobById } from "./jobService";
-import { getCandidateById } from "./candidateService";
+import { evaluateApplication, createDecision } from "./applicationService";
+import { getResume, listCandidateProfiles } from "./resumeService";
 
-// Review-flow service (Phase 1). Orchestrates everything the HR review screen
-// needs from the real backend:
-//   GET  /job-applications/{id}                      application context
-//   GET  /candidates/{id}                            candidate context
-//   GET  /jobs/{id}                                  job context (title)
-//   GET  /job-applications/{id}/evaluations          evaluation versions
-//   GET  /evaluations/{id}                           current evaluation detail
-//   GET  /evaluations/{id}/evidence                  requirement evidence
-//   GET  /jobs/{id}/candidates                       pool frame (group + decision)
-//   POST /job-applications/{id}/evaluate             creates an evaluation run
-//   POST /job-applications/{id}/decisions            records an HR decision
+// Review-flow service. Uses the backend's single aggregation endpoint
+// (Phase 4) instead of composing 7 separate calls:
+//   GET  /job-applications/{id}/review-bundle   everything the review screen needs
+//   POST /job-applications/{id}/evaluate         creates an evaluation run
+//   POST /job-applications/{id}/decisions        records an HR decision
 //
 // Invariants (master-mission contract):
 //   - The backend CandidateEvaluationWorkflow is the ONLY source of evaluation
@@ -22,43 +14,19 @@ import { getCandidateById } from "./candidateService";
 //   - Only the HRDecisionCreate payload { decision, reason } is ever submitted.
 //   - Score/group are displayed as returned; never computed client-side.
 
-// The pool summary (JobCandidateSummary) is the backend's own read model for
-// score, group, decision and decision_created_at read back after a POST.
-export async function getPoolFrame(jobId) {
-  try {
-    const { data } = await apiClient.get(`/jobs/${jobId}/candidates`);
-    return Array.isArray(data) ? data : [];
-  } catch (_err) {
-    return [];
-  }
-}
-
-// One call for the full review screen. Context entities are best-effort:
-// candidate/job are display-only, so a failure there does not block the page.
+// One call for the full review screen. The backend's ReviewService returns
+// application, candidate, job, evaluations, current evaluation, evidence,
+// and pool row — all composed server-side.
 export async function getReviewBundle(applicationId) {
-  const app = await getApplicationById(applicationId);
-  const evaluations = await listEvaluationsByApplication(applicationId);
-  const currentEvaluation =
-    evaluations.find((e) => e.is_current) || evaluations[evaluations.length - 1] || null;
-
-  const [candidate, job, evaluation, evidence, poolFrame] = await Promise.all([
-    getCandidateById(app.candidate_id).catch(() => null),
-    getJobById(app.job_id).catch(() => null),
-    currentEvaluation ? getEvaluationById(currentEvaluation.id) : Promise.resolve(null),
-    currentEvaluation ? getEvaluationEvidence(currentEvaluation.id) : Promise.resolve([]),
-    getPoolFrame(app.job_id),
-  ]);
-
-  const poolRow = poolFrame.find((r) => r.application_id === applicationId) || null;
-
+  const { data } = await apiClient.get(`/job-applications/${applicationId}/review-bundle`);
   return {
-    application: app,
-    candidate,
-    job,
-    evaluations,
-    evaluation,
-    evidence,
-    poolRow,
+    application: data.application,
+    candidate: data.candidate,
+    job: data.job,
+    evaluations: data.evaluations || [],
+    evaluation: data.evaluation,
+    evidence: data.evidence || [],
+    poolRow: data.pool_row,
   };
 }
 
@@ -75,4 +43,38 @@ export async function runEvaluation(applicationId) {
 export async function recordDecision(applicationId, decision, reason) {
   const payload = { decision, reason: (reason || "").trim() || undefined };
   return createDecision(applicationId, payload);
+}
+
+// Full review-workspace load: the review bundle plus the resume metadata and
+// the latest current CandidateProfile, both fetched through EXISTING read
+// endpoints (GET /resumes/{id}, GET /resumes/{id}/profiles). Either extras
+// fetch failure degrades to null — the review screen must never fail because
+// resume/profile metadata is missing.
+export async function getReviewWorkspace(applicationId) {
+  const bundle = await getReviewBundle(applicationId);
+  const extras = await loadResumeAndProfile(bundle.application);
+  return { ...bundle, ...extras };
+}
+
+async function loadResumeAndProfile(application) {
+  if (!application?.resume_id) return { resume: null, profile: null };
+
+  let resume = null;
+  try {
+    resume = await getResume(application.resume_id);
+  } catch {
+    resume = null;
+  }
+
+  let profile = null;
+  try {
+    const profiles = await listCandidateProfiles(application.resume_id);
+    profile =
+      (Array.isArray(profiles) && profiles.find((p) => p.is_current)) ||
+      (Array.isArray(profiles) && profiles[0]) ||
+      null;
+  } catch {
+    profile = null;
+  }
+  return { resume, profile };
 }

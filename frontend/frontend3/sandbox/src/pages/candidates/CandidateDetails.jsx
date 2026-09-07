@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Sparkles,
@@ -8,7 +8,6 @@ import {
   Globe,
   ExternalLink,
   FileText,
-  CalendarClock,
   Pencil,
   Save,
 } from "lucide-react";
@@ -95,7 +94,6 @@ export default function CandidateDetails() {
   }
 
   const skills = c.skills || [];
-  const score = c.score;
 
   return (
     <section>
@@ -144,13 +142,10 @@ export default function CandidateDetails() {
           </div>
         </div>
         <div className="detail-hero-actions">
-          <div className="big-score">
-            <strong>{score === null || score === undefined ? "—" : `${score}%`}</strong>
-            <span>Match Score</span>
+          <div className="big-score" style={{ textAlign: "right" }}>
+            <strong className="muted-note">Score is per job application</strong>
+            <span>View it in Application Review</span>
           </div>
-          <Link className="primary" to="/interviews/schedule" state={{ candidate: c }}>
-            <CalendarClock size={17} /> Schedule Interview
-          </Link>
         </div>
       </div>
 
@@ -189,19 +184,9 @@ export default function CandidateDetails() {
             <Sparkles size={18} />
             <h3>AI Evaluation</h3>
           </div>
-
-          <div className="overall-score-row">
-            <span>Overall Score</span>
-            <strong>{score === null || score === undefined ? "—" : `${score}%`}</strong>
-          </div>
-          <div className="score-track">
-            <i style={{ width: `${score ?? 0}%` }} />
-          </div>
-
-          <h4>AI Explanation</h4>
           <p className="ai-explanation">
-            {c.reason ||
-              "Screening runs against a specific job. Once a candidate is screened (per job), the score, matched/missing skills, and explanation appear here."}
+            AI screening runs against a specific job. Open the application review screen to run (or re-run) the
+            evaluation and see the backend-computed score, the explanation, score breakdown, and requirement evidence.
           </p>
         </div>
       </div>
