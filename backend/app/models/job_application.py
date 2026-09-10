@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from app.models.candidate import Candidate
     from app.models.candidate_evaluation import CandidateEvaluation
     from app.models.hr_decision import HRDecision
+    from app.models.interview import Interview
+    from app.models.interview_question_set import InterviewQuestionSet
     from app.models.job import Job
     from app.models.organization import Organization
     from app.models.resume import Resume
@@ -63,3 +65,7 @@ class JobApplication(Base):
     resume: Mapped[Resume] = relationship(back_populates="applications")
     evaluations: Mapped[list[CandidateEvaluation]] = relationship(back_populates="job_application")
     hr_decisions: Mapped[list[HRDecision]] = relationship(back_populates="job_application")
+    interviews: Mapped[list[Interview]] = relationship(back_populates="job_application")
+    question_sets: Mapped[list[InterviewQuestionSet]] = relationship(
+        back_populates="job_application"
+    )

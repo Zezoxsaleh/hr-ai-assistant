@@ -6,8 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13.0",
     "fastapi>=0.115.0",
-    "langchain>=0.3.0",
-    "langchain-google-genai>=2.0.0",
+    "openai>=1.0.0",
     "psycopg[binary]>=3.2.0",
     "pydantic-settings>=2.6.0",
     "pypdf>=6.0.0",
@@ -35,12 +34,13 @@ include = ["app*"]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "gemini: tests that require a live GEMINI_API_KEY (skipped otherwise)",
+    "soal: tests that require a live SOAL_API_KEY (skipped otherwise)",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["ai-service-handoff"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

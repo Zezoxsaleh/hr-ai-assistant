@@ -11,6 +11,7 @@ from app.models import (
     Candidate,
     CandidateEvaluation,
     CandidateProfile,
+    ChatThread,
     Job,
     JobApplication,
     JobProfile,
@@ -273,6 +274,9 @@ class WorkflowTraceService:
             entity_organization_id = (
                 entity.job_application.organization_id if entity is not None else None
             )
+        elif related_entity_type == "chat_thread":
+            entity = db.get(ChatThread, related_entity_id)
+            entity_organization_id = entity.organization_id if entity is not None else None
         else:
             raise ValidationError("Workflow related entity type is not supported.")
 

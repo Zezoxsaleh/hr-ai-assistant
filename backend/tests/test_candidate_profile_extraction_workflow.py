@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.ai.contracts import CandidateProfileExtractionOutput
 from app.ai.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -109,7 +110,12 @@ def test_success_creates_profile_and_traces(db_session: Session) -> None:
     assert profile.source == "ai_extracted"
     assert profile.status == "extracted"
     assert profile.is_current is True
-    assert profile.profile_data == {"schema_version": "1.1", **valid_payload()}
+    assert profile.profile_data == {
+        "schema_version": "1.1",
+        **CandidateProfileExtractionOutput.model_validate(
+            {"schema_version": "1.1", **valid_payload()}
+        ).model_dump(),
+    }
     assert run.status == "completed"
     assert step.status == "completed"
     assert step.step_name == "extract_candidate_profile"
@@ -430,35 +436,35 @@ def test_no_raw_resume_text_in_ai_trace(db_session: Session) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# GeminiProvider (real provider, optional)
+# SoalProvider (real provider, optional)
 #
-# These tests exercise the workflow against the real Gemini adapter selected
-# through the provider factory. They only run when a GEMINI_API_KEY is present;
+# These tests exercise the workflow against the real Soal adapter selected
+# through the provider factory. They only run when a SOAL_API_KEY is present;
 # otherwise they skip gracefully so CI and fresh environments stay green. Marked
-# ``gemini`` so operators can opt-in explicitly with ``pytest -m gemini``.
+# ``soal`` so operators can opt-in explicitly with ``pytest -m soal``.
 # --------------------------------------------------------------------------- #
 
 
-def _make_gemini_provider() -> tuple[CandidateProfileExtractionWorkflow, str]:
-    api_key = os.environ.get("GEMINI_API_KEY")
+def _make_soal_provider() -> tuple[CandidateProfileExtractionWorkflow, str]:
+    api_key = os.environ.get("SOAL_API_KEY")
     if not api_key:
-        pytest.skip("GEMINI_API_KEY is not set; skipping real Gemini provider tests.")
+        pytest.skip("SOAL_API_KEY is not set; skipping real Soal provider tests.")
     settings = Settings(
-        ai_provider="gemini",
-        gemini_api_key=api_key,
-        gemini_model="gemini-1.5-flash",
+        ai_provider="soal",
+        soal_api_key=api_key,
+        soal_model="gemini-3.5-flash",
     )
     provider = get_provider(settings)
     return CandidateProfileExtractionWorkflow(provider), api_key
 
 
-@pytest.mark.gemini
-class TestGeminiProviderExtraction:
+@pytest.mark.soal
+class TestSoalProviderExtraction:
     def test_success_creates_profile_and_traces(self, db_session: Session) -> None:
         organization = create_organization(db_session)
         candidate = create_candidate(db_session, organization)
         resume = create_resume(db_session, candidate)
-        workflow, _ = _make_gemini_provider()
+        workflow, _ = _make_soal_provider()
         db_session.commit()
 
         result = workflow.run(
@@ -476,11 +482,11 @@ class TestGeminiProviderExtraction:
         assert profile.status == "extracted"
         assert profile.is_current is True
         assert profile.profile_data["full_name"]
-        assert profile.provenance["provider"] == "google"
-        assert profile.provenance["model"] == "gemini-1.5-flash"
+        assert profile.provenance["provider"] == "soal"
+        assert profile.provenance["model"] == "gemini-3.5-flash"
         assert trace.status == "succeeded"
-        assert trace.provider == "google"
-        assert trace.model_name == "gemini-1.5-flash"
+        assert trace.provider == "soal"
+        assert trace.model_name == "gemini-3.5-flash"
         assert trace.input_reference["entity"] == "resume"
         assert trace.input_reference["entity_id"] == str(resume.id)
         assert trace.input_reference["resume_text_sha256"] == _resume_hash()
@@ -492,7 +498,7 @@ class TestGeminiProviderExtraction:
         organization = create_organization(db_session)
         candidate = create_candidate(db_session, organization)
         resume = create_resume(db_session, candidate)
-        workflow, _ = _make_gemini_provider()
+        workflow, _ = _make_soal_provider()
         db_session.commit()
 
         first = workflow.run(
@@ -523,7 +529,7 @@ class TestGeminiProviderExtraction:
     def test_missing_resume_fails_before_any_trace(self, db_session: Session) -> None:
         organization = create_organization(db_session)
         create_candidate(db_session, organization)
-        workflow, _ = _make_gemini_provider()
+        workflow, _ = _make_soal_provider()
         db_session.commit()
 
         with pytest.raises(ValidationError, match="Resume was not found"):
@@ -545,7 +551,7 @@ class TestGeminiProviderExtraction:
         db_session.flush()
         candidate_in_b = create_candidate(db_session, organization_b)
         resume_in_b = create_resume(db_session, candidate_in_b)
-        workflow, _ = _make_gemini_provider()
+        workflow, _ = _make_soal_provider()
         db_session.commit()
 
         with pytest.raises(ValidationError, match="different organization"):

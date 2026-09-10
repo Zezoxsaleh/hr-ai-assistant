@@ -9,6 +9,7 @@ from app.api.v1.schemas.job_applications import (
     ApplicationSummaryResponse,
     JobApplicationCreate,
     JobApplicationResponse,
+    RequirementEvidenceSummary,
 )
 from app.api.v1.schemas.review import ReviewBundleResponse, ReviewCandidateInfo
 from app.core.database import get_db
@@ -51,11 +52,13 @@ def list_org_applications(
     ctx: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
     status: str | None = Query(default=None),
+    candidate_id: uuid.UUID | None = Query(default=None),
 ):
     rows = ReviewService().list_application_summaries(
         db,
         organization_id=ctx.organization_id,
         status=status,
+        candidate_id=candidate_id,
     )
     summaries = []
     for row in rows:
@@ -73,8 +76,17 @@ def list_org_applications(
                 job_id=row.job.id,
                 job_title=row.job.title,
                 score=score,
+                group=row.group,
                 status=row.application.status,
                 created_at=row.application.created_at,
+                evidence=[
+                    RequirementEvidenceSummary(
+                        requirement_key=item.requirement_key,
+                        evidence_type=item.evidence_type,
+                        text=item.text,
+                    )
+                    for item in row.evidence
+                ],
             )
         )
     return summaries

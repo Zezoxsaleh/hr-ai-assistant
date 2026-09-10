@@ -14,6 +14,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from app.ai.contracts.candidate_profile import CandidateProfileExtractionOutput
 from app.ai.contracts.evaluation import EvaluationExplanationOutput
+from app.ai.contracts.job_draft import JobDraftSuggestionOutput
 from app.ai.contracts.job_profile import JobProfileExtractionOutput, JobRequirement
 from app.ai.contracts.match_evidence import MatchEvidenceListOutput, MatchEvidenceOutput
 from app.services.errors import ValidationError
@@ -31,6 +32,11 @@ def _validate_contract(contract_type: type[T], data: Any) -> T:
 def validate_job_profile_extraction(data: Any) -> JobProfileExtractionOutput:
     """Validate raw extraction data into a JobProfileExtractionOutput."""
     return _validate_contract(JobProfileExtractionOutput, data)
+
+
+def validate_job_draft_suggestion(data: Any) -> JobDraftSuggestionOutput:
+    """Validate raw suggestion data into a JobDraftSuggestionOutput."""
+    return _validate_contract(JobDraftSuggestionOutput, data)
 
 
 def normalize_job_profile_requirements(value: Any) -> list[JobRequirement]:

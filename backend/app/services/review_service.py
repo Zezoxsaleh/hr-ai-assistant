@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,6 +28,22 @@ TALENT_POOL_STATUSES = frozenset({"hold", "advanced"})
 
 
 @dataclass(frozen=True)
+class EvidenceSummaryItem:
+    """One compact evidence line for an application summary row.
+
+    ``evidence_type`` is the persisted match classification (matched /
+    partial / missing); ``requirement_key`` identifies the job requirement;
+    ``text`` is the resolved, human-readable requirement label (from the
+    persisted ``requirement_ref`` text/skill, falling back to the current
+    evaluation's ``score_breakdown`` requirement label, then the key).
+    """
+
+    evidence_type: str
+    requirement_key: str | None = None
+    text: str = ""
+
+
+@dataclass(frozen=True)
 class ApplicationSummaryRow:
     """One org-wide application row (application + candidate + job + score)."""
 
@@ -34,6 +51,8 @@ class ApplicationSummaryRow:
     candidate: Candidate
     job: Job
     current_evaluation: CandidateEvaluation | None
+    group: str
+    evidence: list[EvidenceSummaryItem]
 
 
 @dataclass(frozen=True)
@@ -46,6 +65,24 @@ class TalentPoolRow:
     current_evaluation: CandidateEvaluation | None
     latest_decision: HRDecision | None
     group: str
+
+
+def _requirement_topic(requirement_ref: dict[str, Any] | None) -> str:
+    """Extract a natural-language requirement label from a requirement_ref.
+
+    Prefers the human-readable fields the AI stores (``skill``/``text``/
+    ``requirement``) and returns ``""`` when none are present — callers then
+    fall back to the evaluation's ``score_breakdown`` label and finally the
+    system ``requirement_key``. Mirrors the extraction used by the interview
+    question flow.
+    """
+    if not isinstance(requirement_ref, dict):
+        return ""
+    for key in ("skill", "text", "requirement"):
+        value = requirement_ref.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -97,12 +134,19 @@ class ReviewService:
         *,
         organization_id: uuid.UUID,
         status: str | None = None,
+        candidate_id: uuid.UUID | None = None,
     ) -> list[ApplicationSummaryRow]:
         """Return org-wide application summaries, newest first.
 
         Organization scope is enforced directly; only each application's
         current evaluation is considered (``is_current=True``), avoiding any
-        load of version history and any N+1.
+        load of version history. Requirement evidence for every current
+        evaluation is loaded in a single batched query (one ``IN`` clause on
+        the current evaluation ids), and each row carries the deterministic
+        grouping band — so list views get real evidence and groups without
+        any per-row request (no N+1). Scores and groups are never recomputed.
+        An optional ``candidate_id`` narrows the list to one candidate's
+        applications (used by application-aware entry points).
         """
         if status is not None and status not in VALID_APPLICATION_STATUSES:
             raise ValidationError(f"Invalid application status filter: {status!r}.")
@@ -121,17 +165,86 @@ class ReviewService:
         )
         if status is not None:
             query = query.where(JobApplication.status == status)
+        if candidate_id is not None:
+            query = query.where(JobApplication.candidate_id == candidate_id)
 
         rows = db.execute(query).all()
-        return [
-            ApplicationSummaryRow(
-                application=application,
-                candidate=candidate,
-                job=job,
-                current_evaluation=evaluation,
+        evaluations = [evaluation for _a, _c, _j, evaluation in rows if evaluation is not None]
+
+        evidence_by_evaluation: dict[uuid.UUID, list[tuple[str, dict[str, Any] | None]]] = {}
+        if evaluations:
+            evidence_rows = db.execute(
+                select(
+                    MatchEvidence.candidate_evaluation_id,
+                    MatchEvidence.evidence_type,
+                    MatchEvidence.requirement_ref,
+                )
+                .where(MatchEvidence.candidate_evaluation_id.in_([e.id for e in evaluations]))
+                .order_by(MatchEvidence.created_at, MatchEvidence.id)
+            ).all()
+            for evaluation_id, evidence_type, requirement_ref in evidence_rows:
+                evidence_by_evaluation.setdefault(evaluation_id, []).append(
+                    (evidence_type, requirement_ref)
+                )
+
+        # Resolve each requirement label once per evaluation from the persisted
+        # score_breakdown (key -> {text, ...}), mirroring the review screen's
+        # fallback: requirement_ref text/skill first, then the breakdown's
+        # requirement text, then the system key. The breakdown is already on
+        # the loaded evaluation objects, so no extra query is needed.
+        breakdown_labels_by_evaluation: dict[uuid.UUID, dict[str, str]] = {}
+        for evaluation in evaluations:
+            breakdown = evaluation.score_breakdown or {}
+            labels = {
+                str(key): str(entry.get("text") or "")
+                for key, entry in breakdown.items()
+                if isinstance(entry, dict) and entry.get("text")
+            }
+            if labels:
+                breakdown_labels_by_evaluation[evaluation.id] = labels
+
+        summaries = []
+        for application, candidate, job, evaluation in rows:
+            raw_evidence = (
+                evidence_by_evaluation.get(evaluation.id, []) if evaluation is not None else []
             )
-            for application, candidate, job, evaluation in rows
-        ]
+            labels = (
+                breakdown_labels_by_evaluation.get(evaluation.id, {})
+                if evaluation is not None
+                else {}
+            )
+            evidence = []
+            for evidence_type, requirement_ref in raw_evidence:
+                requirement_key = (
+                    (requirement_ref or {}).get("requirement_key")
+                    if isinstance(requirement_ref, dict)
+                    else None
+                )
+                evidence.append(
+                    EvidenceSummaryItem(
+                        evidence_type=evidence_type,
+                        requirement_key=requirement_key,
+                        text=(
+                            _requirement_topic(requirement_ref)
+                            or (labels.get(requirement_key) if requirement_key else "")
+                            or requirement_key
+                            or ""
+                        ),
+                    )
+                )
+            summaries.append(
+                ApplicationSummaryRow(
+                    application=application,
+                    candidate=candidate,
+                    job=job,
+                    current_evaluation=evaluation,
+                    group=assign_group(
+                        self._as_decimal(evaluation.score if evaluation is not None else None)
+                    ),
+                    evidence=evidence,
+                )
+            )
+        return summaries
 
     def list_talent_pool(
         self,

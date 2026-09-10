@@ -49,6 +49,45 @@ from app.ai.workflows.candidate_profile_extraction import (
     CandidateProfileExtractionResult,
     CandidateProfileExtractionWorkflow,
 )
+from app.ai.workflows.hera_assistant import (
+    COMPOSE_AI_COMPONENT as HERA_COMPOSE_AI_COMPONENT,
+)
+from app.ai.workflows.hera_assistant import (
+    PLAN_AI_COMPONENT as HERA_PLAN_AI_COMPONENT,
+)
+from app.ai.workflows.hera_assistant import (
+    PROMPT_VERSION as HERA_PROMPT_VERSION,
+)
+from app.ai.workflows.hera_assistant import (
+    STEP_COMPOSE as HERA_STEP_COMPOSE,
+)
+from app.ai.workflows.hera_assistant import (
+    STEP_PLAN as HERA_STEP_PLAN,
+)
+from app.ai.workflows.hera_assistant import (
+    WORKFLOW_TYPE as HERA_WORKFLOW_TYPE,
+)
+from app.ai.workflows.hera_assistant import (
+    HERAAssistantResult,
+    HERAAssistantWorkflow,
+    HERAToolInvocation,
+)
+from app.ai.workflows.interview_questions import (
+    AI_COMPONENT_NAME as INTERVIEW_QUESTION_AI_COMPONENT,
+)
+from app.ai.workflows.interview_questions import (
+    PROMPT_VERSION as INTERVIEW_QUESTION_PROMPT_VERSION,
+)
+from app.ai.workflows.interview_questions import (
+    STEP_NAME as INTERVIEW_QUESTION_STEP,
+)
+from app.ai.workflows.interview_questions import (
+    WORKFLOW_TYPE as INTERVIEW_QUESTION_WORKFLOW_TYPE,
+)
+from app.ai.workflows.interview_questions import (
+    InterviewQuestionGenerationResult,
+    InterviewQuestionGenerationWorkflow,
+)
 from app.ai.workflows.job_profile_extraction import (
     AI_COMPONENT_NAME,
     PROMPT_VERSION,
@@ -76,6 +115,21 @@ __all__ = [
     "CANDIDATE_PROFILE_WORKFLOW_TYPE",
     "CandidateProfileExtractionResult",
     "CandidateProfileExtractionWorkflow",
+    "HERA_COMPOSE_AI_COMPONENT",
+    "HERA_PLAN_AI_COMPONENT",
+    "HERA_PROMPT_VERSION",
+    "HERA_STEP_COMPOSE",
+    "HERA_STEP_PLAN",
+    "HERA_WORKFLOW_TYPE",
+    "HERAAssistantResult",
+    "HERAAssistantWorkflow",
+    "HERAToolInvocation",
     "JobProfileExtractionResult",
     "JobProfileExtractionWorkflow",
+    "INTERVIEW_QUESTION_AI_COMPONENT",
+    "INTERVIEW_QUESTION_PROMPT_VERSION",
+    "INTERVIEW_QUESTION_STEP",
+    "INTERVIEW_QUESTION_WORKFLOW_TYPE",
+    "InterviewQuestionGenerationResult",
+    "InterviewQuestionGenerationWorkflow",
 ]

@@ -69,3 +69,7 @@ class LocalFileSystemStorage(StorageProvider):
             path.parent.rmdir()
         except OSError:
             return
+
+    def read(self, *, file_uri: str) -> bytes:
+        """Return the raw bytes of a previously persisted file."""
+        return Path(file_uri).read_bytes()

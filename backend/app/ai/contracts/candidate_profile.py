@@ -1,9 +1,11 @@
 """Structured AI output for candidate profile extraction.
 
 Represents the structured data an extractor produces from a candidate resume.
-The schema is intentionally minimal and mirrors only terminology already
-established in the repository (for example the ``skills`` key used by Phase
-3.1 candidate profile fixtures).
+Contact details, links, and education/language/certification lists are optional
+because not every resume carries them; the extractor only emits values it can
+ground in the resume text (phone numbers, e-mail addresses, and profile URLs are
+never invented). When absent the consumer renders a graceful "not found" state
+instead of fabricating a value.
 """
 
 from typing import Annotated
@@ -23,3 +25,12 @@ class CandidateProfileExtractionOutput(BaseModel):
     summary: str | None = None
     skills: Annotated[list[str], Field(default_factory=list)]
     experience: Annotated[list[str], Field(default_factory=list)]
+    email: str | None = None
+    phone: str | None = None
+    location: str | None = None
+    linkedin_url: str | None = None
+    github_url: str | None = None
+    portfolio_url: str | None = None
+    education: Annotated[list[str], Field(default_factory=list)]
+    languages: Annotated[list[str], Field(default_factory=list)]
+    certifications: Annotated[list[str], Field(default_factory=list)]

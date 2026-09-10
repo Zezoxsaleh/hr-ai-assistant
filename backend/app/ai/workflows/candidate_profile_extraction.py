@@ -34,6 +34,7 @@ from app.ai.contracts import (
     CandidateProfileExtractionOutput,
     validate_candidate_profile_extraction,
 )
+from app.ai.markers import wrap_untrusted
 from app.ai.providers.base import AIProvider, StructuredGenerationRequest
 from app.ai.providers.errors import ProviderError
 from app.models import Resume
@@ -117,7 +118,7 @@ class CandidateProfileExtractionWorkflow:
         try:
             result = self._provider.generate_structured(
                 StructuredGenerationRequest(
-                    input=resume_text,
+                    input=wrap_untrusted(resume_text, "CV"),
                     output_schema=CandidateProfileExtractionOutput,
                     schema_version=AI_CONTRACT_SCHEMA_VERSION,
                     metadata={"workflow": WORKFLOW_TYPE},

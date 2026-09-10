@@ -27,7 +27,7 @@ class WorkflowRun(Base):
         CheckConstraint(
             "related_entity_type IS NULL OR related_entity_type IN ("
             "'job', 'candidate', 'resume', 'job_application', 'job_profile', "
-            "'candidate_profile', 'candidate_evaluation'"
+            "'candidate_profile', 'candidate_evaluation', 'chat_thread'"
             ")",
             name="ck_workflow_runs_related_entity_type",
         ),

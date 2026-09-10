@@ -26,6 +26,7 @@ from app.ai.contracts import (
     JobProfileExtractionOutput,
     validate_job_profile_extraction,
 )
+from app.ai.markers import wrap_untrusted
 from app.ai.providers.base import AIProvider, StructuredGenerationRequest
 from app.ai.providers.errors import ProviderError
 from app.models import Job
@@ -108,7 +109,7 @@ class JobProfileExtractionWorkflow:
         try:
             result = self._provider.generate_structured(
                 StructuredGenerationRequest(
-                    input=raw_description,
+                    input=wrap_untrusted(raw_description, "JOB_DESCRIPTION"),
                     output_schema=JobProfileExtractionOutput,
                     schema_version=AI_CONTRACT_SCHEMA_VERSION,
                     metadata={"workflow": WORKFLOW_TYPE},

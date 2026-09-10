@@ -1,8 +1,8 @@
-"""Hermetic unit tests for the Gemini provider adapter and provider factory.
+"""Hermetic unit tests for the Soal provider adapter and provider factory.
 
-These tests never make network calls: ``ChatGoogleGenerativeAI`` is replaced
-with fakes, and ``db_session`` fixtures are only used to assert that provider
-calls never write trace/run rows.
+These tests never make network calls: the OpenAI client is replaced with fakes,
+and ``db_session`` fixtures are only used to assert that provider calls never
+write trace/run rows.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ from sqlalchemy.orm import Session
 from app.ai.contracts import CandidateProfileExtractionOutput, JobProfileExtractionOutput
 from app.ai.providers import (
     FakeAIProvider,
-    GeminiProvider,
     ProviderInvalidRequestError,
     ProviderRateLimitError,
     ProviderTimeoutError,
     ProviderUnavailableError,
+    SoalProvider,
     StructuredGenerationRequest,
     TextGenerationRequest,
     get_provider,
@@ -30,31 +30,66 @@ from app.core.config import Settings
 from app.models import AITrace, WorkflowRun, WorkflowStepTrace
 
 
-class _Message:
-    """Minimal stand-in for a LangChain ``AIMessage``."""
+class _FakeUsage:
+    """Minimal stand-in for an OpenAI ``usage`` object."""
 
-    def __init__(self, content, token_usage=None, usage_metadata=None) -> None:
+    def __init__(self, prompt_tokens=0, completion_tokens=0, total_tokens=0) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+        self.total_tokens = total_tokens
+
+
+class _FakeMessage:
+    """Minimal stand-in for an OpenAI ``message`` object."""
+
+    def __init__(self, content) -> None:
         self.content = content
-        self.response_metadata = {"token_usage": token_usage} if token_usage else {}
-        self.usage_metadata = usage_metadata
 
 
-class _FakeLLM:
-    """Minimal stand-in for ``langchain_google_genai.ChatGoogleGenerativeAI``."""
+class _FakeChoice:
+    """Minimal stand-in for an OpenAI ``choice`` object."""
 
-    def __init__(self, message=None, exception=None) -> None:
-        self._message = message
+    def __init__(self, message) -> None:
+        self.message = message
+
+
+class _FakeCompletion:
+    """Minimal stand-in for an OpenAI ``chat.completions.create`` response."""
+
+    def __init__(self, message, usage=None) -> None:
+        self.choices = [_FakeChoice(message)]
+        self.usage = usage
+
+
+class _FakeCompletions:
+    """Stand-in for ``client.chat.completions``."""
+
+    def __init__(self, completion=None, exception=None, sequence=None) -> None:
+        self._completion = completion
         self._exception = exception
+        self._sequence = sequence
+        self._call_count = 0
 
-    def with_structured_output(self, schema, method="json_mode"):
-        assert method == "json_mode"
-        assert schema is not None
-        return self
-
-    def invoke(self, _messages):
+    def create(self, **_kwargs):
         if self._exception is not None:
             raise self._exception
-        return self._message
+        if self._sequence is not None:
+            item = self._sequence[min(self._call_count, len(self._sequence) - 1)]
+            self._call_count += 1
+            return item
+        return self._completion
+
+
+class _FakeChat:
+    def __init__(self, completions) -> None:
+        self.completions = completions
+
+
+class _FakeOpenAI:
+    """Stand-in for ``openai.OpenAI`` (accepts the real constructor kwargs)."""
+
+    def __init__(self, completions, **_kwargs) -> None:
+        self.chat = _FakeChat(completions)
 
 
 class _HTTPError(Exception):
@@ -65,20 +100,44 @@ class _HTTPError(Exception):
         self.status_code = status_code
 
 
-def _patch_llm(fake_llm) -> mock._patch:
+def _patch_client(completions: _FakeCompletions) -> mock._patch:
     return mock.patch(
-        "app.ai.providers.gemini.ChatGoogleGenerativeAI",
-        return_value=fake_llm,
+        "app.ai.providers.soal.OpenAI",
+        return_value=_FakeOpenAI(completions),
     )
+
+
+def _completion(content, usage=None) -> _FakeCompletion:
+    return _FakeCompletion(_FakeMessage(content), usage=usage)
 
 
 def _structured_request(schema) -> StructuredGenerationRequest:
     return StructuredGenerationRequest(input="extract candidate profile", output_schema=schema)
 
 
-def _structured_provider(fake_llm) -> GeminiProvider:
-    with _patch_llm(fake_llm):
-        return GeminiProvider(api_key="test-key", model="gemini-1.5-flash")
+def _candidate_payload() -> dict:
+    return {
+        "full_name": "Ada Lovelace",
+        "summary": "Mathematician",
+        "skills": ["Python"],
+        "experience": [],
+    }
+
+
+def json_payload_dict() -> dict:
+    return _candidate_payload()
+
+
+def json_payload() -> str:
+    return (
+        '{"full_name": "Ada Lovelace", "summary": "Mathematician", '
+        '"skills": ["Python"], "experience": []}'
+    )
+
+
+def _structured_provider(completions: _FakeCompletions) -> SoalProvider:
+    with _patch_client(completions):
+        return SoalProvider(api_key="test-key", model="gemini-3.5-flash")
 
 
 def _count(db: Session, model) -> int:
@@ -91,24 +150,14 @@ def _count(db: Session, model) -> int:
 
 
 def test_structured_result_exposes_provider_and_model_with_valid_data() -> None:
-    payload = {
-        "full_name": "Ada Lovelace",
-        "summary": "Mathematician",
-        "skills": ["Python"],
-        "experience": [],
-    }
-    json_payload = (
-        '{"full_name": "Ada Lovelace", "summary": "Mathematician", '
-        '"skills": ["Python"], "experience": []}'
-    )
-    provider = _structured_provider(_FakeLLM(message=_Message(content=json_payload)))
+    provider = _structured_provider(_FakeCompletions(completion=_completion(json_payload())))
 
     result = provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
     assert isinstance(result, StructuredAIResult)
-    assert result.provider == "google"
-    assert result.model == "gemini-1.5-flash"
-    assert result.data == payload
+    assert result.provider == "soal"
+    assert result.model == "gemini-3.5-flash"
+    assert result.data == _candidate_payload()
 
 
 def test_structured_data_matches_output_schema_when_content_is_dict() -> None:
@@ -118,7 +167,7 @@ def test_structured_data_matches_output_schema_when_content_is_dict() -> None:
         "skills": ["Logic"],
         "experience": [],
     }
-    provider = _structured_provider(_FakeLLM(message=_Message(content=payload)))
+    provider = _structured_provider(_FakeCompletions(completion=_completion(payload)))
 
     result = provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
@@ -131,7 +180,7 @@ def test_structured_with_job_profile_schema() -> None:
         "summary": "Builds services",
         "requirements": [{"text": "Python", "category": "must_have", "dimension": "skill"}],
     }
-    provider = _structured_provider(_FakeLLM(message=_Message(content=payload)))
+    provider = _structured_provider(_FakeCompletions(completion=_completion(payload)))
 
     result = provider.generate_structured(_structured_request(JobProfileExtractionOutput))
 
@@ -139,13 +188,13 @@ def test_structured_with_job_profile_schema() -> None:
     assert result.schema_version == "1.1"
 
 
-def test_structured_extracts_token_usage_from_response_metadata() -> None:
-    usage = {"promptTokenCount": 12, "candidatesTokenCount": 8, "totalTokenCount": 20}
+def test_structured_extracts_token_usage_from_usage() -> None:
+    usage = _FakeUsage(prompt_tokens=12, completion_tokens=8, total_tokens=20)
     provider = _structured_provider(
-        _FakeLLM(
-            message=_Message(
+        _FakeCompletions(
+            completion=_completion(
                 content={"full_name": "Ada", "summary": "s", "skills": [], "experience": []},
-                token_usage=usage,
+                usage=usage,
             )
         )
     )
@@ -153,16 +202,16 @@ def test_structured_extracts_token_usage_from_response_metadata() -> None:
     result = provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
     assert result.token_usage == {
-        "promptTokenCount": 12,
-        "candidatesTokenCount": 8,
-        "totalTokenCount": 20,
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "total_tokens": 20,
     }
 
 
 def test_structured_records_positive_latency() -> None:
     provider = _structured_provider(
-        _FakeLLM(
-            message=_Message(
+        _FakeCompletions(
+            completion=_completion(
                 content={"full_name": "Ada", "summary": "s", "skills": [], "experience": []}
             )
         )
@@ -175,9 +224,27 @@ def test_structured_records_positive_latency() -> None:
 
 
 def test_structured_without_schema_returns_no_data() -> None:
-    provider = _structured_provider(_FakeLLM(message=_Message(content="not structured")))
+    provider = _structured_provider(_FakeCompletions(completion=_completion("not structured")))
 
     result = provider.generate_structured(StructuredGenerationRequest(input="plain"))
+
+    assert result.data is None
+
+
+def test_structured_retries_when_parsing_fails_then_succeeds() -> None:
+    bad = _completion("not valid json at all")
+    good = _completion(json_payload())
+    provider = _structured_provider(_FakeCompletions(sequence=[bad, good]))
+
+    result = provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
+
+    assert result.data == json_payload_dict()
+
+
+def test_structured_exhausts_retries_and_returns_none() -> None:
+    provider = _structured_provider(_FakeCompletions(completion=_completion("always broken")))
+
+    result = provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
     assert result.data is None
 
@@ -188,21 +255,21 @@ def test_structured_without_schema_returns_no_data() -> None:
 
 
 def test_text_result_exposes_provider_model_text_and_usage() -> None:
-    usage = {"promptTokenCount": 4, "candidatesTokenCount": 6, "totalTokenCount": 10}
+    usage = _FakeUsage(prompt_tokens=4, completion_tokens=6, total_tokens=10)
     provider = _structured_provider(
-        _FakeLLM(message=_Message(content="short cover letter", token_usage=usage))
+        _FakeCompletions(completion=_completion("short cover letter", usage=usage))
     )
 
     result = provider.generate_text(TextGenerationRequest(input="write a summary"))
 
     assert isinstance(result, TextAIResult)
-    assert result.provider == "google"
-    assert result.model == "gemini-1.5-flash"
+    assert result.provider == "soal"
+    assert result.model == "gemini-3.5-flash"
     assert result.text == "short cover letter"
     assert result.token_usage == {
-        "promptTokenCount": 4,
-        "candidatesTokenCount": 6,
-        "totalTokenCount": 10,
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
     }
 
 
@@ -212,42 +279,44 @@ def test_text_result_exposes_provider_model_text_and_usage() -> None:
 
 
 def test_timeout_error_is_mapped() -> None:
-    provider = _structured_provider(_FakeLLM(exception=TimeoutError("request timed out")))
+    provider = _structured_provider(_FakeCompletions(exception=TimeoutError("request timed out")))
 
     with pytest.raises(ProviderTimeoutError):
         provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
 
 def test_http_timeout_status_is_mapped() -> None:
-    provider = _structured_provider(_FakeLLM(exception=_HTTPError(504, "gateway timeout")))
+    provider = _structured_provider(_FakeCompletions(exception=_HTTPError(504, "gateway timeout")))
 
     with pytest.raises(ProviderTimeoutError):
         provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
 
 def test_rate_limit_error_is_mapped() -> None:
-    provider = _structured_provider(_FakeLLM(exception=_HTTPError(429, "resource exhausted")))
+    provider = _structured_provider(
+        _FakeCompletions(exception=_HTTPError(429, "resource exhausted"))
+    )
 
     with pytest.raises(ProviderRateLimitError):
         provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
 
 def test_invalid_request_error_is_mapped() -> None:
-    provider = _structured_provider(_FakeLLM(exception=_HTTPError(400, "invalid argument")))
+    provider = _structured_provider(_FakeCompletions(exception=_HTTPError(400, "invalid argument")))
 
     with pytest.raises(ProviderInvalidRequestError):
         provider.generate_text(TextGenerationRequest(input="boom"))
 
 
 def test_server_error_is_mapped_to_unavailable() -> None:
-    provider = _structured_provider(_FakeLLM(exception=_HTTPError(500, "internal error")))
+    provider = _structured_provider(_FakeCompletions(exception=_HTTPError(500, "internal error")))
 
     with pytest.raises(ProviderUnavailableError):
         provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
 
 
 def test_unknown_error_is_mapped_to_unavailable() -> None:
-    provider = _structured_provider(_FakeLLM(exception=RuntimeError("mystery failure")))
+    provider = _structured_provider(_FakeCompletions(exception=RuntimeError("mystery failure")))
 
     with pytest.raises(ProviderUnavailableError):
         provider.generate_structured(_structured_request(CandidateProfileExtractionOutput))
@@ -260,8 +329,8 @@ def test_unknown_error_is_mapped_to_unavailable() -> None:
 
 def test_structured_generation_writes_no_db_rows(db_session: Session) -> None:
     provider = _structured_provider(
-        _FakeLLM(
-            message=_Message(
+        _FakeCompletions(
+            completion=_completion(
                 content={"full_name": "Ada", "summary": "s", "skills": [], "experience": []}
             )
         )
@@ -275,7 +344,7 @@ def test_structured_generation_writes_no_db_rows(db_session: Session) -> None:
 
 
 def test_text_generation_writes_no_db_rows(db_session: Session) -> None:
-    provider = _structured_provider(_FakeLLM(message=_Message(content="hello")))
+    provider = _structured_provider(_FakeCompletions(completion=_completion("hello")))
 
     provider.generate_text(TextGenerationRequest(input="hi"))
 
@@ -289,22 +358,21 @@ def test_text_generation_writes_no_db_rows(db_session: Session) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_factory_returns_gemini_with_key() -> None:
-    settings = Settings(
-        ai_provider="gemini", gemini_api_key="secret", gemini_model="gemini-1.5-flash"
-    )
+def test_factory_returns_soal_with_key() -> None:
+    settings = Settings(ai_provider="soal", soal_api_key="secret", soal_model="gemini-3.5-flash")
     with mock.patch(
-        "app.ai.providers.gemini.ChatGoogleGenerativeAI",
-        return_value=_FakeLLM(),
+        "app.ai.providers.soal.OpenAI",
+        return_value=_FakeOpenAI(_FakeCompletions()),
     ):
         provider = get_provider(settings)
 
-    assert isinstance(provider, GeminiProvider)
-    assert provider.model_name == "gemini-1.5-flash"
+    assert isinstance(provider, SoalProvider)
+    assert provider.model_name == "gemini-3.5-flash"
+    assert provider.base_url == "https://soal.help/api/v1"
 
 
 def test_factory_returns_fake_in_fake_mode() -> None:
-    settings = Settings(ai_provider="fake", gemini_api_key="secret")
+    settings = Settings(ai_provider="fake", soal_api_key="secret")
 
     provider = get_provider(settings, provider="fake", model="fake-model")
 
@@ -312,7 +380,7 @@ def test_factory_returns_fake_in_fake_mode() -> None:
 
 
 def test_factory_falls_back_to_fake_when_key_missing() -> None:
-    settings = Settings(ai_provider="gemini", gemini_api_key=None)
+    settings = Settings(ai_provider="soal", soal_api_key=None)
 
     provider = get_provider(settings)
 

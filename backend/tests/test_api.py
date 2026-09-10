@@ -1018,6 +1018,91 @@ class TestHRDecisions:
         assert data["reason"] == "Good fit"
         assert data["user_id"] == user["id"]
 
+    def test_create_decision_with_evaluation_reference(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+
+        job = models.Job(
+            organization_id=organization.id,
+            created_by_user_id=user_obj.id,
+            title="J",
+        )
+        db_session.add(job)
+        db_session.flush()
+
+        candidate = models.Candidate(organization_id=organization.id, full_name="C")
+        db_session.add(candidate)
+        db_session.flush()
+
+        resume = models.Resume(candidate_id=candidate.id, file_uri="local://r.pdf")
+        db_session.add(resume)
+        db_session.flush()
+
+        application = models.JobApplication(
+            organization_id=organization.id,
+            job_id=job.id,
+            candidate_id=candidate.id,
+            resume_id=resume.id,
+        )
+        db_session.add(application)
+        db_session.flush()
+
+        job_profile = models.JobProfile(
+            job_id=job.id,
+            version_number=1,
+            status="approved",
+            source="hr_created",
+            profile_data={"title": "J", "skills": ["Python"]},
+            approved_by_user_id=user_obj.id,
+            approved_at=datetime.now(UTC),
+            is_current=True,
+        )
+        db_session.add(job_profile)
+        db_session.flush()
+
+        candidate_profile = models.CandidateProfile(
+            resume_id=resume.id,
+            version_number=1,
+            status="current",
+            source="system_extracted",
+            profile_data={"skills": ["Python"]},
+            is_current=True,
+        )
+        db_session.add(candidate_profile)
+        db_session.flush()
+
+        evaluation = models.CandidateEvaluation(
+            job_application_id=application.id,
+            job_profile_id=job_profile.id,
+            candidate_profile_id=candidate_profile.id,
+            version_number=1,
+            status="completed",
+            recommendation="advance",
+            explanation={"summary": "Strong match."},
+            is_current=True,
+        )
+        db_session.add(evaluation)
+        db_session.flush()
+
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/decisions",
+            json={
+                "decision": "advance",
+                "reason": "Good fit.",
+                "candidate_evaluation_id": str(evaluation.id),
+            },
+            headers=h,
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["decision"] == "advance"
+        assert data["candidate_evaluation_id"] == str(evaluation.id)
+
     def test_invalid_decision_rejected(self, client: httpx.Client, db_session: Session) -> None:
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
@@ -1262,6 +1347,7 @@ class TestJobScreening:
             },
             headers=h,
         ).json()
+        _approve_job_profile(client, h, job["id"])
 
         resp = client.post(
             f"/api/v1/jobs/{job['id']}/screen",
@@ -1300,6 +1386,105 @@ class TestJobScreening:
         assert resp.status_code == 200
         assert len(resp.json()) == 2
 
+    def test_screen_extracts_real_details_and_downloads_cv(self, client: httpx.Client) -> None:
+        import io
+        from decimal import Decimal
+
+        from docx import Document
+
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+
+        resume_lines = [
+            "Ada Lovelace",
+            "London, United Kingdom",
+            "ada.lovelace@example.com",
+            "+44 20 7946 0958",
+            "linkedin.com/in/ada-lovelace",
+            "github.com/adalovelace",
+            "portfolio: ada.dev/engineering",
+            "EXPERIENCE",
+            "Data Analyst, 2018 - 2021",
+            "Senior Data Engineer, 2021 - present",
+            "EDUCATION",
+            "BSc Computer Science",
+            "MSc Data Science",
+            "CERTIFICATIONS",
+            "AWS Certified Solutions Architect",
+            "SKILLS",
+            "Python, TypeScript, React, Postgres, Docker, Kubernetes, Machine Learning",
+            "Languages: English (native), French",
+        ]
+        document = Document()
+        for line in resume_lines:
+            document.add_paragraph(line)
+        buffer = io.BytesIO()
+        document.save(buffer)
+
+        job = client.post(
+            "/api/v1/jobs",
+            json={
+                "title": "Screening Details Job",
+                "status": "active",
+                "raw_description": "Hiring an engineer with backend experience.",
+                "required_skills": ["Python", "Data Engineering", "Postgres"],
+                "requirements": ["Machine Learning"],
+            },
+            headers=h,
+        ).json()
+        _approve_job_profile(client, h, job["id"])
+
+        resp = client.post(
+            f"/api/v1/jobs/{job['id']}/screen",
+            headers=h,
+            files=[
+                (
+                    "files",
+                    (
+                        "ada-lovelace-cv.docx",
+                        buffer.getvalue(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
+                )
+            ],
+        )
+        assert resp.status_code == 201
+        row = resp.json()["screened"][0]
+        score = Decimal(row["score"])
+        assert score > 0
+
+        profiles = client.get(f"/api/v1/resumes/{row['resume_id']}/profiles", headers=h)
+        assert profiles.status_code == 200
+        profile_data = profiles.json()[0]["profile_data"]
+        assert profile_data["email"] == "ada.lovelace@example.com"
+        assert profile_data["phone"] == "+44 20 7946 0958"
+        assert "linkedin.com/in/ada-lovelace" in profile_data["linkedin_url"]
+        assert any((s or "").strip().lower() == "python" for s in (profile_data["skills"] or []))
+        assert len(profile_data["education"]) >= 2
+
+        evaluations = client.get(
+            f"/api/v1/job-applications/{row['application_id']}/evaluations",
+            headers=h,
+        )
+        assert evaluations.status_code == 200
+        evaluation = evaluations.json()[0]
+        assert Decimal(evaluation["score"]) == score
+        assert evaluation["explanation"]["summary"]
+
+        evidence = client.get(
+            f"/api/v1/evaluations/{row['evaluation_id']}/evidence",
+            headers=h,
+        )
+        assert evidence.status_code == 200
+        assert len(evidence.json()) >= 1
+        assert {"matched", "missing", "partial"} & {
+            item["evidence_type"] for item in evidence.json()
+        }
+
+        download = client.get(f"/api/v1/resumes/{row['resume_id']}/download", headers=h)
+        assert download.status_code == 200
+        assert download.content[:2] == b"PK"  # docx zip signature
+
     def test_screen_rejects_empty_file(self, client: httpx.Client) -> None:
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
@@ -1313,6 +1498,7 @@ class TestJobScreening:
             },
             headers=h,
         ).json()
+        _approve_job_profile(client, h, job["id"])
 
         resp = client.post(
             f"/api/v1/jobs/{job['id']}/screen",
@@ -1431,6 +1617,16 @@ def _seed_evaluation(
     return evaluation
 
 
+def _approve_job_profile(client: httpx.Client, headers: dict, job_id: str) -> str:
+    """Extract a JobProfile draft for a job and approve it via the HR endpoint."""
+    extract = client.post(f"/api/v1/jobs/{job_id}/extract-profile", headers=headers)
+    assert extract.status_code == 201, extract.text
+    profile_id = extract.json()["profile_id"]
+    approve = client.post(f"/api/v1/job-profiles/{profile_id}/approve", headers=headers)
+    assert approve.status_code == 200, approve.text
+    return profile_id
+
+
 class TestApplicationList:
     def test_list_applications_org_scoped_with_summary_fields(
         self, client: httpx.Client, db_session: Session
@@ -1461,6 +1657,146 @@ class TestApplicationList:
         assert row["job_title"] == "Read Model Job"
         assert row["score"] == "92.000"
         assert row["status"] == "created"
+        assert row["group"] == "must_review"
+        assert row["evidence"] == []
+
+    def test_list_applications_includes_group_and_evidence(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        evaluation = _seed_evaluation(db_session, application, score="55.000")
+        evaluation.score_breakdown = {
+            "req-0000000000000004": {"text": "Scala", "category": "must_have"},
+        }
+        db_session.add_all(
+            [
+                models.MatchEvidence(
+                    candidate_evaluation_id=evaluation.id,
+                    evidence_type="matched",
+                    requirement_ref={"requirement_key": "req-0000000000000001", "text": "Python"},
+                    strength="strong",
+                ),
+                models.MatchEvidence(
+                    candidate_evaluation_id=evaluation.id,
+                    evidence_type="partial",
+                    requirement_ref={
+                        "requirement_key": "req-0000000000000002",
+                        "skill": "Airflow",
+                    },
+                    strength="moderate",
+                ),
+                models.MatchEvidence(
+                    candidate_evaluation_id=evaluation.id,
+                    evidence_type="missing",
+                    requirement_ref={
+                        "requirement_key": "req-0000000000000003",
+                        "text": "Kubernetes",
+                    },
+                    strength="weak",
+                ),
+                models.MatchEvidence(
+                    candidate_evaluation_id=evaluation.id,
+                    evidence_type="matched",
+                    requirement_ref={"requirement_key": "req-0000000000000004"},
+                ),
+            ]
+        )
+        db_session.flush()
+
+        resp = client.get("/api/v1/job-applications", headers=h)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["group"] == "consider"
+        assert sorted(row["evidence"], key=lambda item: item["requirement_key"]) == [
+            {
+                "requirement_key": "req-0000000000000001",
+                "evidence_type": "matched",
+                "text": "Python",
+            },
+            {
+                "requirement_key": "req-0000000000000002",
+                "evidence_type": "partial",
+                "text": "Airflow",
+            },
+            {
+                "requirement_key": "req-0000000000000003",
+                "evidence_type": "missing",
+                "text": "Kubernetes",
+            },
+            {
+                "requirement_key": "req-0000000000000004",
+                "evidence_type": "matched",
+                "text": "Scala",
+            },
+        ]
+
+    def test_list_applications_two_apps_order_and_evidence_scoping(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        app_a, _job_a, _candidate_a, _resume_a = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        job_b = models.Job(
+            organization_id=organization.id,
+            created_by_user_id=user_obj.id,
+            title="Read Model Job B",
+        )
+        candidate_b = models.Candidate(
+            organization_id=organization.id,
+            full_name="Second Candidate",
+            email="second-candidate@example.com",
+        )
+        db_session.add_all([job_b, candidate_b])
+        db_session.flush()
+        resume_b = models.Resume(candidate_id=candidate_b.id, file_uri="local://read-model-b.pdf")
+        db_session.add(resume_b)
+        db_session.flush()
+        app_b = models.JobApplication(
+            organization_id=organization.id,
+            job_id=job_b.id,
+            candidate_id=candidate_b.id,
+            resume_id=resume_b.id,
+            status="hold",
+        )
+        db_session.add(app_b)
+        db_session.flush()
+        eval_a = _seed_evaluation(db_session, app_a, score="92.000")
+        db_session.add(
+            models.MatchEvidence(
+                candidate_evaluation_id=eval_a.id,
+                evidence_type="matched",
+                requirement_ref={"requirement_key": "req-0000000000000001", "text": "Python"},
+            )
+        )
+        db_session.flush()
+
+        resp = client.get("/api/v1/job-applications", headers=h)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 2
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[str(app_a.id)]["evidence"] == [
+            {
+                "requirement_key": "req-0000000000000001",
+                "evidence_type": "matched",
+                "text": "Python",
+            }
+        ]
+        assert by_id[str(app_b.id)]["evidence"] == []
+        assert by_id[str(app_a.id)]["group"] == "must_review"
+        assert by_id[str(app_b.id)]["group"] == "lower_priority"
 
     def test_list_applications_status_filter(
         self, client: httpx.Client, db_session: Session
@@ -1493,9 +1829,268 @@ class TestApplicationList:
         resp = client.get("/api/v1/job-applications", params={"status": "bogus"}, headers=h)
         assert resp.status_code == 422
 
+    def test_list_applications_candidate_filter(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        job_b = models.Job(
+            organization_id=organization.id,
+            created_by_user_id=user_obj.id,
+            title="Read Model Job B",
+        )
+        db_session.add(job_b)
+        db_session.flush()
+        resume_b = models.Resume(candidate_id=candidate.id, file_uri="local://read-model-b.pdf")
+        db_session.add(resume_b)
+        db_session.flush()
+        app_b = models.JobApplication(
+            organization_id=organization.id,
+            job_id=job_b.id,
+            candidate_id=candidate.id,
+            resume_id=resume_b.id,
+            status="hold",
+        )
+        db_session.add(app_b)
+        db_session.flush()
+
+        other_org, other_user = bootstrap(client)
+        other_organization = db_session.get(models.Organization, uuid.UUID(other_org["id"]))
+        other_user_obj = db_session.get(models.User, uuid.UUID(other_user["id"]))
+        _other_app, _other_job, other_candidate, _other_resume = _seed_application_records(
+            db_session, other_organization, other_user_obj
+        )
+
+        resp = client.get(
+            "/api/v1/job-applications",
+            params={"candidate_id": str(candidate.id)},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 2
+        assert {row["id"] for row in rows} == {str(application.id), str(app_b.id)}
+        assert all(row["candidate_id"] == str(candidate.id) for row in rows)
+
+        resp = client.get(
+            "/api/v1/job-applications",
+            params={"candidate_id": str(other_candidate.id)},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+        resp = client.get(
+            "/api/v1/job-applications",
+            params={"candidate_id": str(uuid.uuid4())},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == []
+
     def test_list_applications_missing_headers_returns_422(self, client: httpx.Client) -> None:
         resp = client.get("/api/v1/job-applications")
         assert resp.status_code == 422
+
+
+class TestInterviewQuestionSetCreate:
+    def test_create_question_set_creates_generated_draft(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+
+        payload = {
+            "questions": [
+                {
+                    "category": "technical",
+                    "text": "Walk me through a REST API you designed.",
+                    "topic": "API design",
+                    "requirement_key": "req-0000000000000001",
+                },
+                {
+                    "category": "behavioral",
+                    "text": "Tell me about a failure you learned from.",
+                    "topic": None,
+                    "requirement_key": None,
+                },
+            ]
+        }
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets",
+            json=payload,
+            headers=h,
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["job_application_id"] == str(application.id)
+        assert body["organization_id"] == str(organization.id)
+        assert body["status"] == "generated"
+        assert body["generated_by"] == "hr"
+        assert body["is_current"] is False
+        assert body["version_number"] == 1
+        assert body["provenance"] == {"source": "interview_prep"}
+        assert [question["position"] for question in body["questions"]] == [0, 1]
+        assert [question["text"] for question in body["questions"]] == [
+            "Walk me through a REST API you designed.",
+            "Tell me about a failure you learned from.",
+        ]
+
+        listed = client.get(f"/api/v1/job-applications/{application.id}/question-sets", headers=h)
+        assert listed.status_code == 200
+        assert listed.json()["total"] == 1
+        assert listed.json()["question_sets"][0]["id"] == body["id"]
+
+    def test_create_question_set_unknown_application_returns_404(
+        self, client: httpx.Client
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        resp = client.post(
+            f"/api/v1/job-applications/{uuid.uuid4()}/question-sets",
+            json={
+                "questions": [
+                    {
+                        "category": "technical",
+                        "text": "Explain optimistic locking.",
+                        "topic": None,
+                        "requirement_key": None,
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert resp.status_code == 404
+
+    def test_create_question_set_other_org_application_returns_422(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        other_org, other_user = bootstrap(client)
+        other_organization = db_session.get(models.Organization, uuid.UUID(other_org["id"]))
+        other_user_obj = db_session.get(models.User, uuid.UUID(other_user["id"]))
+        other_application, _job, _candidate, _resume = _seed_application_records(
+            db_session, other_organization, other_user_obj
+        )
+        resp = client.post(
+            f"/api/v1/job-applications/{other_application.id}/question-sets",
+            json={
+                "questions": [
+                    {
+                        "category": "technical",
+                        "text": "Explain optimistic locking.",
+                        "topic": None,
+                        "requirement_key": None,
+                    }
+                ]
+            },
+            headers=h,
+        )
+        assert resp.status_code == 422
+
+    def test_create_question_set_empty_questions_returns_422(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets",
+            json={"questions": []},
+            headers=h,
+        )
+        assert resp.status_code == 422
+
+
+class TestQuestionGapDisplayLabels:
+    def test_candidate_specific_gap_question_never_leaks_requirement_key(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        evaluation = _seed_evaluation(db_session, application, score="55.000")
+        evaluation.score_breakdown = {
+            "req-gap-example": {"text": "Distributed Systems", "category": "must_have"},
+        }
+        db_session.add(
+            models.MatchEvidence(
+                candidate_evaluation_id=evaluation.id,
+                evidence_type="missing",
+                requirement_ref={"requirement_key": "req-gap-example"},
+                strength="weak",
+            )
+        )
+        db_session.flush()
+
+        resp = client.get(
+            "/api/v1/interview-questions",
+            params={"candidate_id": str(candidate.id)},
+            headers=h,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        gap_questions = [
+            question["text"]
+            for question in body["questions"]["Candidate-Specific"]
+            if question["id"].startswith("cs-gap-")
+        ]
+        assert gap_questions
+        assert "req-gap-example" not in " ".join(gap_questions)
+        assert "Distributed Systems" in gap_questions[0]
+
+    def test_generated_gap_question_uses_readable_label(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        evaluation = _seed_evaluation(db_session, application, score="55.000")
+        evaluation.score_breakdown = {
+            "req-gap-example": {"text": "Distributed Systems", "category": "must_have"},
+        }
+        db_session.add(
+            models.MatchEvidence(
+                candidate_evaluation_id=evaluation.id,
+                evidence_type="missing",
+                requirement_ref={"requirement_key": "req-gap-example"},
+                strength="weak",
+            )
+        )
+        db_session.flush()
+
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate",
+            headers=h,
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert any("Distributed Systems" in question["text"] for question in body["questions"])
+        for question in body["questions"]:
+            assert "req-gap-example" not in question["text"]
 
 
 class TestReviewBundle:
@@ -1737,3 +2332,297 @@ class TestTalentPool:
         resp = client.get("/api/v1/talent-pool", headers=h)
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+class TestScreeningApprovalGate:
+    """Prove screening never bypasses the HR JobProfile approval gate."""
+
+    def _create_job(self, client: httpx.Client, headers: dict) -> dict:
+        return client.post(
+            "/api/v1/jobs",
+            json={
+                "title": "Gate Test Job",
+                "status": "active",
+                "raw_description": "Build and maintain backend services.",
+            },
+            headers=headers,
+        ).json()
+
+    def _pdf(self, filename: str = "gate-candidate.pdf") -> tuple[str, bytes, str]:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        return filename, make_pdf_bytes(), "application/pdf"
+
+    def _screen(self, client: httpx.Client, headers: dict, job_id: str):
+        return client.post(
+            f"/api/v1/jobs/{job_id}/screen",
+            headers=headers,
+            files=[("files", self._pdf())],
+        )
+
+    def test_screen_without_approved_profile_fails(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+
+        resp = self._screen(client, h, job["id"])
+        assert resp.status_code == 422
+        assert "approved JobProfile" in resp.json()["detail"]
+
+    def test_screen_with_draft_profile_fails(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+
+        extract = client.post(f"/api/v1/jobs/{job['id']}/extract-profile", headers=h)
+        assert extract.status_code == 201
+
+        resp = self._screen(client, h, job["id"])
+        assert resp.status_code == 422
+        assert "approved JobProfile" in resp.json()["detail"]
+
+    def test_screen_with_approved_profile_succeeds(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+        _approve_job_profile(client, h, job["id"])
+
+        resp = self._screen(client, h, job["id"])
+        assert resp.status_code == 201
+        assert len(resp.json()["screened"]) == 1
+
+    def test_extraction_never_creates_approval_metadata(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+
+        extract = client.post(f"/api/v1/jobs/{job['id']}/extract-profile", headers=h)
+        assert extract.status_code == 201
+        profile = db_session.get(models.JobProfile, uuid.UUID(extract.json()["profile_id"]))
+        assert profile is not None
+        assert profile.status == "draft"
+        assert profile.approved_by_user_id is None
+        assert profile.approved_at is None
+        assert profile.is_current is True
+
+    def test_hr_approval_creates_approval_metadata(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+        _approve_job_profile(client, h, job["id"])
+
+        profile = db_session.scalar(
+            select(models.JobProfile)
+            .where(models.JobProfile.job_id == uuid.UUID(job["id"]))
+            .order_by(models.JobProfile.version_number)
+        )
+        assert profile is not None
+        assert profile.status == "approved"
+        assert profile.approved_by_user_id == uuid.UUID(user["id"])
+        assert profile.approved_at is not None
+        assert profile.is_current is True
+
+    def test_screening_does_not_overwrite_approved_profile(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+        profile_id = _approve_job_profile(client, h, job["id"])
+
+        resp = self._screen(client, h, job["id"])
+        assert resp.status_code == 201
+
+        profiles = client.get(f"/api/v1/jobs/{job['id']}/profiles", headers=h)
+        assert profiles.status_code == 200
+        versions = profiles.json()
+        assert len(versions) == 1
+        assert versions[0]["id"] == profile_id
+        assert versions[0]["status"] == "approved"
+        assert versions[0]["is_current"] is True
+
+    def test_failed_screen_creates_no_profile_and_no_approval(self, client: httpx.Client) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        job = self._create_job(client, h)
+
+        resp = self._screen(client, h, job["id"])
+        assert resp.status_code == 422
+
+        profiles = client.get(f"/api/v1/jobs/{job['id']}/profiles", headers=h)
+        assert profiles.status_code == 200
+        assert profiles.json() == []
+
+        job_resp = client.get(f"/api/v1/jobs/{job['id']}", headers=h)
+        assert job_resp.status_code == 200
+        assert job_resp.json()["status"] == "active"  # untouched by the failed screen
+
+
+class _RecordingQuestionProvider:
+    """Duck-typed AIProvider returning a contract-valid question payload."""
+
+    def generate_structured(self, request):
+        from app.ai.results import StructuredAIResult
+
+        return StructuredAIResult(
+            provider="recorded-soal",
+            model="soal-test-model",
+            data={
+                "schema_version": "1.1",
+                "questions": [
+                    {
+                        "category": "technical",
+                        "text": "Describe your experience building backend services.",
+                        "topic": None,
+                        "requirement_key": None,
+                    },
+                    {
+                        "category": "behavioral",
+                        "text": "Describe a time you disagreed with a technical decision.",
+                        "topic": None,
+                        "requirement_key": None,
+                    },
+                ],
+            },
+            schema_version=request.schema_version,
+        )
+
+
+class _InvalidQuestionProvider:
+    def generate_structured(self, request):
+        from app.ai.results import StructuredAIResult
+
+        return StructuredAIResult(
+            provider="fake",
+            model="fake-model",
+            data={
+                "schema_version": "1.1",
+                "questions": [
+                    {
+                        "category": "bogus",
+                        "text": "",
+                        "topic": None,
+                        "requirement_key": None,
+                    }
+                ],
+            },
+            schema_version=request.schema_version,
+        )
+
+
+class TestQuestionSetGenerationProvider:
+    """Prove question generation honors the configured AI provider."""
+
+    def _seed_application(self, client: httpx.Client, db_session: Session):
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, _resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        return h, application
+
+    def test_generate_uses_fake_provider_by_default(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        h, application = self._seed_application(client, db_session)
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate", headers=h
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["status"] == "generated"
+        assert body["provenance"]["provider"] == "fake"
+        assert body["provenance"]["model"] == "fake-interview-question-model"
+        assert body["approved_by_user_id"] is None
+        assert body["approved_at"] is None
+
+    def test_generate_honors_soal_provider_configuration(
+        self, client: httpx.Client, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded: dict[str, object] = {}
+
+        def stub_get_provider(settings_object, **fake_kwargs):
+            recorded["provider_kwarg"] = fake_kwargs.get("provider")
+            return _RecordingQuestionProvider()
+
+        monkeypatch.setattr("app.ai.providers.get_provider", stub_get_provider)
+        monkeypatch.setattr(
+            "app.ai.providers.factory.resolve_ai_config",
+            lambda settings_object: {
+                "provider": "soal",
+                "model": "soal-test-model",
+                "base_url": "https://example.invalid/v1",
+                "api_key": "test-key",
+                "api_key_source": "environment",
+                "is_fake": False,
+            },
+        )
+
+        h, application = self._seed_application(client, db_session)
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate", headers=h
+        )
+        assert resp.status_code == 201
+        assert recorded["provider_kwarg"] is None
+        assert resp.json()["provenance"]["provider"] == "recorded-soal"
+        assert resp.json()["provenance"]["model"] == "soal-test-model"
+
+    def test_generate_reports_provider_failure(
+        self, client: httpx.Client, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.ai.providers.errors import ProviderUnavailableError
+
+        def failing_provider(settings_object, **fake_kwargs):
+            raise ProviderUnavailableError("provider down")
+
+        monkeypatch.setattr("app.ai.providers.get_provider", failing_provider)
+
+        h, application = self._seed_application(client, db_session)
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate", headers=h
+        )
+        assert resp.status_code == 503
+
+        sets = client.get(f"/api/v1/job-applications/{application.id}/question-sets", headers=h)
+        assert sets.status_code == 200
+        assert sets.json()["total"] == 0
+
+    def test_generate_rejects_invalid_ai_output(
+        self, client: httpx.Client, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "app.ai.providers.get_provider",
+            lambda settings_object, **fake_kwargs: _InvalidQuestionProvider(),
+        )
+
+        h, application = self._seed_application(client, db_session)
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate", headers=h
+        )
+        assert resp.status_code == 422
+
+        sets = client.get(f"/api/v1/job-applications/{application.id}/question-sets", headers=h)
+        assert sets.status_code == 200
+        assert sets.json()["total"] == 0
+
+    def test_generate_creates_no_hr_decision_or_score(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        h, application = self._seed_application(client, db_session)
+        resp = client.post(
+            f"/api/v1/job-applications/{application.id}/question-sets/generate", headers=h
+        )
+        assert resp.status_code == 201
+
+        decisions = db_session.scalars(
+            select(models.HRDecision).where(models.HRDecision.job_application_id == application.id)
+        ).all()
+        assert decisions == []
+
+        bundle = client.get(f"/api/v1/job-applications/{application.id}/review-bundle", headers=h)
+        assert bundle.status_code == 200
+        assert bundle.json()["evaluations"] == []

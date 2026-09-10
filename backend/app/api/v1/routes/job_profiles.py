@@ -61,9 +61,15 @@ def approve_job_profile(
     ctx: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ):
-    return JobProfileService().approve(
+    from app.services.job_service import JobService
+
+    profile = JobProfileService().approve(
         db,
         profile_id=uuid.UUID(profile_id),
         approved_by_user_id=ctx.user_id,
         organization_id=ctx.organization_id,
     )
+    job = JobService().get(db, job_id=profile.job_id, organization_id=ctx.organization_id)
+    if job.status == "awaiting_profile_review":
+        job.status = "active"
+    return profile

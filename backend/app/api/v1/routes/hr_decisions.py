@@ -28,5 +28,6 @@ def create_hr_decision(
         user_id=ctx.user_id,
         decision=body.decision,
         reason=body.reason,
+        candidate_evaluation_id=body.candidate_evaluation_id,
         organization_id=ctx.organization_id,
     )

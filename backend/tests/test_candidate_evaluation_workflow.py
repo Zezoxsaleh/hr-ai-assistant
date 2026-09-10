@@ -1089,23 +1089,23 @@ def test_reevaluation_does_not_accumulate_duplicate_evidence(db_session: Session
 
 
 # --------------------------------------------------------------------------- #
-# GeminiProvider (real provider, optional)
+# SoalProvider (real provider, optional)
 #
-# These tests exercise the workflow against real Gemini adapters selected
-# through the provider factory. They only run when a GEMINI_API_KEY is present;
+# These tests exercise the workflow against real Soal adapters selected
+# through the provider factory. They only run when a SOAL_API_KEY is present;
 # otherwise they skip gracefully so CI and fresh environments stay green. Marked
-# ``gemini`` so operators can opt in explicitly with ``pytest -m gemini``.
+# ``soal`` so operators can opt in explicitly with ``pytest -m soal``.
 # --------------------------------------------------------------------------- #
 
 
-def _make_gemini_workflow() -> tuple[CandidateEvaluationWorkflow, str]:
-    api_key = os.environ.get("GEMINI_API_KEY")
+def _make_soal_workflow() -> tuple[CandidateEvaluationWorkflow, str]:
+    api_key = os.environ.get("SOAL_API_KEY")
     if not api_key:
-        pytest.skip("GEMINI_API_KEY is not set; skipping real Gemini provider tests.")
+        pytest.skip("SOAL_API_KEY is not set; skipping real Soal provider tests.")
     settings = Settings(
-        ai_provider="gemini",
-        gemini_api_key=api_key,
-        gemini_model="gemini-1.5-flash",
+        ai_provider="soal",
+        soal_api_key=api_key,
+        soal_model="gemini-3.5-flash",
     )
     evidence_provider = get_provider(settings)
     explanation_provider = get_provider(settings)
@@ -1118,13 +1118,13 @@ def _make_gemini_workflow() -> tuple[CandidateEvaluationWorkflow, str]:
     )
 
 
-@pytest.mark.gemini
-class TestGeminiProviderEvaluation:
+@pytest.mark.soal
+class TestSoalProviderEvaluation:
     def test_success_creates_evaluation_and_match_evidence(self, db_session: Session) -> None:
         organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
             db_session
         )
-        workflow, _ = _make_gemini_workflow()
+        workflow, _ = _make_soal_workflow()
 
         result = workflow.run(
             db_session,
@@ -1142,13 +1142,13 @@ class TestGeminiProviderEvaluation:
         assert evaluation.status == "completed"
         assert evaluation.job_application_id == application.id
         assert evaluation.explanation is not None
-        assert evaluation.provenance["provider"] == "google"
-        assert evaluation.provenance["model"] == "gemini-1.5-flash"
+        assert evaluation.provenance["provider"] == "soal"
+        assert evaluation.provenance["model"] == "gemini-3.5-flash"
         assert run.status == "completed"
         assert step.status == "completed"
         assert step.step_name == "evaluate_candidate"
         assert evidence_trace.status == "succeeded"
-        assert evidence_trace.provider == "google"
+        assert evidence_trace.provider == "soal"
         assert explanation_trace.status == "succeeded"
         assert evidence_trace.input_reference["entity"] == "job_application"
 
@@ -1156,7 +1156,7 @@ class TestGeminiProviderEvaluation:
         organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
             db_session
         )
-        workflow, _ = _make_gemini_workflow()
+        workflow, _ = _make_soal_workflow()
 
         first = workflow.run(
             db_session,
@@ -1185,7 +1185,7 @@ class TestGeminiProviderEvaluation:
         organization, _user, _application, _job_profile, _candidate_profile = create_parent_records(
             db_session
         )
-        workflow, _ = _make_gemini_workflow()
+        workflow, _ = _make_soal_workflow()
 
         with pytest.raises(NotFoundError, match="JobApplication was not found"):
             workflow.run(

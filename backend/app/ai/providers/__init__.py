@@ -1,7 +1,7 @@
 """Provider implementations.
 
-Phase 3.3 ships the deterministic ``FakeAIProvider``; ``GeminiProvider`` adds a
-real Google Gemini adapter via LangChain, selected through ``get_provider``.
+Phase 3.3 ships the deterministic ``FakeAIProvider``; ``SoalProvider`` adds a
+real Soal.help adapter via the OpenAI SDK, selected through ``get_provider``.
 """
 
 from app.ai.providers.base import (
@@ -19,12 +19,12 @@ from app.ai.providers.errors import (
 )
 from app.ai.providers.factory import get_provider
 from app.ai.providers.fake import FakeAIProvider
-from app.ai.providers.gemini import GeminiProvider
+from app.ai.providers.soal import SoalProvider
 
 __all__ = [
     "AIProvider",
     "FakeAIProvider",
-    "GeminiProvider",
+    "SoalProvider",
     "ProviderError",
     "ProviderInvalidRequestError",
     "ProviderRateLimitError",

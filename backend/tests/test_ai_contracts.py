@@ -459,6 +459,36 @@ def test_supported_schema_version_accepted(version) -> None:
     assert output.schema_version == version
 
 
+@pytest.mark.parametrize(
+    "version",
+    [
+        "1.1",
+        "v1.1",
+        "V1.1",
+        " v1.1 ",
+        "1.0",
+        "v1.0",
+    ],
+)
+def test_schema_version_normalized_to_canonical(version) -> None:
+    expected = version.strip().lstrip("vV") or "1.1"
+    output = JobProfileExtractionOutput.model_validate({"title": "X", "schema_version": version})
+    assert output.schema_version == expected
+
+
+@pytest.mark.parametrize("version", ["1.2", "v1.2", "V1.2", " v1.2 "])
+def test_evidence_schema_version_normalized_to_canonical(version) -> None:
+    output = MatchEvidenceOutput.model_validate(
+        {**_valid_match_evidence(), "schema_version": version}
+    )
+    assert output.schema_version == "1.2"
+
+    list_output = MatchEvidenceListOutput.model_validate(
+        {**_valid_evidence_list(), "schema_version": version}
+    )
+    assert list_output.schema_version == "1.2"
+
+
 # --------------------------------------------------------------------------- #
 # Read-path normalization helper
 # --------------------------------------------------------------------------- #

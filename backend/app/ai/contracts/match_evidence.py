@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ai.contracts.schema import (
     EVIDENCE_CONTRACT_SCHEMA_VERSION,
+    EvidenceSchemaVersion,
 )
 
 
@@ -27,7 +28,7 @@ class MatchEvidenceOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.2"] = EVIDENCE_CONTRACT_SCHEMA_VERSION
+    schema_version: EvidenceSchemaVersion = EVIDENCE_CONTRACT_SCHEMA_VERSION
     evidence_type: Literal["matched", "missing", "partial"]
     requirement_ref: dict[str, Any] = Field(
         ...,
@@ -53,7 +54,7 @@ class MatchEvidenceListOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.2"] = EVIDENCE_CONTRACT_SCHEMA_VERSION
+    schema_version: EvidenceSchemaVersion = EVIDENCE_CONTRACT_SCHEMA_VERSION
     evidence_items: list[MatchEvidenceOutput]
     provenance: dict[str, Any] | None = None
 

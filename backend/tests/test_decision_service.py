@@ -136,6 +136,28 @@ def test_creates_explicit_hr_decision(db_session: Session) -> None:
     assert decision.reason == "Strong technical match."
 
 
+def test_decision_transitions_application_pipeline_status(db_session: Session) -> None:
+    service = DecisionService()
+    transitions = {
+        "advance": "advanced",
+        "hold": "hold",
+        "reject": "rejected",
+    }
+
+    for decision, expected_status in transitions.items():
+        _org, user, application, _jp, _cp = create_parent_records(db_session)
+        service.create(
+            db_session,
+            job_application_id=application.id,
+            user_id=user.id,
+            decision=decision,
+            organization_id=_org.id,
+        )
+        db_session.commit()
+        refreshed = db_session.get(JobApplication, application.id)
+        assert refreshed.status == expected_status, f"{decision} -> {expected_status}"
+
+
 def test_references_correct_job_application(db_session: Session) -> None:
     organization, user, application, _jp, _cp = create_parent_records(db_session)
     service = DecisionService()

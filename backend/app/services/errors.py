@@ -16,3 +16,7 @@ class InvalidStateError(ApplicationError):
 
 class VersionConflictError(ApplicationError):
     """Raised when a versioned insert conflicts with existing history."""
+
+
+class ConflictError(ApplicationError):
+    """Raised when a scheduling request overlaps an existing interview window."""

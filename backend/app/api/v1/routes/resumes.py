@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.v1.deps import RequestContext, get_request_context
@@ -66,4 +66,31 @@ def get_resume(
 ):
     return ResumeService().get(
         db, resume_id=uuid.UUID(resume_id), organization_id=ctx.organization_id
+    )
+
+
+@router.get("/resumes/{resume_id}/download")
+def download_resume(
+    resume_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+):
+    """Stream the raw CV bytes for a resume the organization owns.
+
+    Returns the original file with its stored content type and a
+    ``Content-Disposition`` attachment header so browsers download it.
+    """
+    resume = ResumeService().get(
+        db, resume_id=uuid.UUID(resume_id), organization_id=ctx.organization_id
+    )
+    storage = LocalFileSystemStorage(settings.storage_root_dir)
+    content = storage.read(file_uri=resume.file_uri)
+    media_type = resume.content_type or "application/octet-stream"
+    filename = resume.original_filename or "resume.pdf"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
     )

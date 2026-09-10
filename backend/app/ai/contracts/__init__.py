@@ -8,6 +8,22 @@ fields) validated by helpers that raise the shared application ValidationError.
 
 from app.ai.contracts.candidate_profile import CandidateProfileExtractionOutput
 from app.ai.contracts.evaluation import EvaluationExplanationOutput
+from app.ai.contracts.hera import (
+    MAX_REPLY_LINKS,
+    MAX_TOOL_CALLS,
+    HERALink,
+    HERAPlanOutput,
+    HERAReplyOutput,
+    HERAToolCall,
+    validate_hera_plan,
+    validate_hera_reply,
+)
+from app.ai.contracts.interview_questions import (
+    InterviewQuestionOutput,
+    InterviewQuestionSetOutput,
+    validate_interview_question_set,
+)
+from app.ai.contracts.job_draft import JobDraftSuggestionOutput
 from app.ai.contracts.job_profile import (
     REQUIREMENT_CATEGORIES,
     REQUIREMENT_DIMENSIONS,
@@ -29,6 +45,7 @@ from app.ai.contracts.validation import (
     normalize_job_profile_requirements,
     validate_candidate_profile_extraction,
     validate_evaluation_explanation,
+    validate_job_draft_suggestion,
     validate_job_profile_extraction,
     validate_match_evidence,
     validate_match_evidence_list,
@@ -39,8 +56,17 @@ __all__ = [
     "CandidateProfileExtractionOutput",
     "EVIDENCE_CONTRACT_SCHEMA_VERSION",
     "EvaluationExplanationOutput",
+    "HERALink",
+    "HERAPlanOutput",
+    "HERAReplyOutput",
+    "HERAToolCall",
+    "InterviewQuestionOutput",
+    "InterviewQuestionSetOutput",
+    "JobDraftSuggestionOutput",
     "JobProfileExtractionOutput",
     "JobRequirement",
+    "MAX_REPLY_LINKS",
+    "MAX_TOOL_CALLS",
     "MatchEvidenceListOutput",
     "MatchEvidenceOutput",
     "REQUIREMENT_CATEGORIES",
@@ -51,6 +77,10 @@ __all__ = [
     "requirement_key",
     "validate_candidate_profile_extraction",
     "validate_evaluation_explanation",
+    "validate_hera_plan",
+    "validate_hera_reply",
+    "validate_interview_question_set",
+    "validate_job_draft_suggestion",
     "validate_job_profile_extraction",
     "validate_match_evidence",
     "validate_match_evidence_list",

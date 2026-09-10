@@ -27,14 +27,37 @@ def extract_job_profile(
     ctx: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ):
+    """Extract a versioned JobProfile draft from a job's raw description.
 
+    Runs the JobProfileExtractionWorkflow through the provider abstraction
+    (real Soal provider when configured, deterministic fake payload otherwise) and
+    records the AI run in the workflow traces. After a successful extraction
+    the job lifecycle moves from ``draft`` to ``awaiting_profile_review``; the
+    transition only fires when the job is still a draft.
+    """
     from app.ai.providers import get_provider
+    from app.ai.providers.factory import resolve_ai_config
     from app.ai.workflows import JobProfileExtractionWorkflow
     from app.core.config import settings
+    from app.services.job_service import JobService
 
-    provider = get_provider(settings, provider="fake", model="fake-model")
-    workflow = JobProfileExtractionWorkflow(provider)
-    result = workflow.run(db, job_id=uuid.UUID(job_id), organization_id=ctx.organization_id)
+    job_uuid = uuid.UUID(job_id)
+    job = JobService().get(db, job_id=job_uuid, organization_id=ctx.organization_id)
+
+    if not resolve_ai_config(settings)["is_fake"]:
+        provider = get_provider(settings)
+    else:
+        provider = get_provider(
+            settings,
+            provider="fake",
+            model="fake-model",
+            structured_payload=_derive_extraction_payload(job),
+        )
+    result = JobProfileExtractionWorkflow(provider).run(
+        db, job_id=job_uuid, organization_id=ctx.organization_id
+    )
+    if job.status == "draft":
+        job.status = "awaiting_profile_review"
     db.commit()
     return result
 
@@ -52,17 +75,17 @@ def screen_candidates(
 ):
     """Screen a batch of uploaded CVs against a job.
 
+    Requires an HR-approved JobProfile for the job. When no approved profile
+    exists, screening is rejected and the caller is told to extract a profile
+    and approve it in HR review first; screening never auto-appoves a profile.
     For each uploaded file this creates a candidate, stores and parses the
     resume, extracts a candidate profile, attaches the candidate to the job as
-    an application, and runs the candidate evaluation workflow. The job profile
-    is extracted and approved once on first use so the evaluation has an
-    approved baseline to score against.
+    an application, and runs the candidate evaluation workflow.
     """
     from app.ai.providers import get_provider
     from app.ai.workflows import (
         CandidateEvaluationWorkflow,
         CandidateProfileExtractionWorkflow,
-        JobProfileExtractionWorkflow,
     )
     from app.core.config import settings
     from app.models import CandidateEvaluation
@@ -71,6 +94,7 @@ def screen_candidates(
     from app.services.job_application_service import JobApplicationService
     from app.services.job_profile_service import JobProfileService
     from app.services.job_service import JobService
+    from app.services.resume_details_service import derive_screening_payloads
     from app.services.resume_service import ResumeService
     from app.services.storage_service import LocalFileSystemStorage
 
@@ -86,40 +110,9 @@ def screen_candidates(
             approved_profile = profile
 
     if approved_profile is None:
-        extractor = get_provider(
-            settings,
-            provider="fake",
-            model="fake-model",
-            structured_payload={
-                "title": job.title,
-                "summary": "Job profile extracted during screening.",
-                "requirements": [
-                    {
-                        "text": "Relevant professional experience",
-                        "category": "must_have",
-                        "dimension": "experience",
-                    },
-                    {
-                        "text": "Core technical and domain skills",
-                        "category": "must_have",
-                        "dimension": "skill",
-                    },
-                ],
-            },
-        )
-        extraction = JobProfileExtractionWorkflow(extractor).run(
-            db, job_id=job_uuid, organization_id=ctx.organization_id
-        )
-        profile_claim = job_profile_service.get_version(
-            db,
-            profile_id=extraction.profile_id,
-            organization_id=ctx.organization_id,
-        )
-        approved_profile = job_profile_service.approve(
-            db,
-            profile_id=profile_claim.id,
-            approved_by_user_id=ctx.user_id,
-            organization_id=ctx.organization_id,
+        raise ValidationError(
+            "Screening requires an approved JobProfile. "
+            "Extract a profile and approve it in HR review before screening candidates."
         )
 
     candidate_service = CandidateService()
@@ -150,16 +143,21 @@ def screen_candidates(
             max_upload_bytes=settings.max_upload_bytes,
             storage=storage,
         )
+        profile_payload, evidence_payload, explanation_payload = derive_screening_payloads(
+            full_name=candidate.full_name,
+            job_title=job.title,
+            resume_text=resume.extracted_text,
+            requirements=(
+                approved_profile.profile_data.get("requirements")
+                if approved_profile is not None
+                else []
+            ),
+        )
         profile_extractor = get_provider(
             settings,
             provider="fake",
             model="fake-model",
-            structured_payload={
-                "full_name": candidate.full_name,
-                "summary": "Candidate screened for this job during this run.",
-                "skills": [],
-                "experience": [],
-            },
+            structured_payload=profile_payload,
         )
         CandidateProfileExtractionWorkflow(profile_extractor).run(
             db,
@@ -179,20 +177,13 @@ def screen_candidates(
                 settings,
                 provider="fake",
                 model="fake-evidence-model",
-                structured_payload={
-                    "evidence_items": [],
-                    "schema_version": "1.2",
-                },
+                structured_payload=evidence_payload,
             ),
             explanation_provider=get_provider(
                 settings,
                 provider="fake",
                 model="fake-explanation-model",
-                structured_payload={
-                    "summary": f"Candidate screened against {job.title}.",
-                    "points": [],
-                    "schema_version": "1.1",
-                },
+                structured_payload=explanation_payload,
             ),
         ).run(
             db,
@@ -218,6 +209,46 @@ def screen_candidates(
     }
 
 
+def _derive_extraction_payload(job) -> dict:
+    """Build a deterministic JobProfileExtractionOutput payload from a job.
+
+    Fake-provider stand-in for the extract step: the suggested profile mirrors
+    the job's own title and the same requirement vocabulary the job declares
+    (required skills/requirement notes plus professional-experience baseline),
+    so the deterministic path stays grounded in real job data.
+    """
+    return {
+        "title": job.title,
+        "summary": "Job profile derived from the job's own data.",
+        "requirements": _default_job_requirements(job),
+    }
+
+
+def _default_job_requirements(job) -> list[dict[str, str]]:
+    """Build default requirements grounded in the job's own data.
+
+    The requirements come from the job's required skills, requirement notes,
+    and professional-experience baseline so the deterministic evidence matcher
+    grades against the same vocabulary the job actually declares.
+    """
+    requirements: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for value in [*(job.required_skills or []), *(job.requirements or [])]:
+        text = (value or "").strip()
+        if not text or text.lower() in seen:
+            continue
+        seen.add(text.lower())
+        requirements.append({"text": text, "category": "must_have", "dimension": "skill"})
+    requirements.append(
+        {
+            "text": "Relevant professional experience",
+            "category": "must_have",
+            "dimension": "experience",
+        }
+    )
+    return requirements
+
+
 def _candidate_name_from_filename(filename: str) -> str:
     """Derive a display name from a CV filename like ``ada-lovelace-cv.pdf``."""
     stem = filename.rsplit(".", 1)[0].replace("_", " ").replace("-", " ").strip()
@@ -232,6 +263,26 @@ def _candidate_name_from_filename(filename: str) -> str:
     if not cleaned:
         return "Screened Candidate"
     return " ".join(cleaned)
+
+
+def _candidate_name_for_resume(
+    db: Session,
+    *,
+    resume_id: uuid.UUID,
+    organization_id: uuid.UUID,
+) -> str:
+    """Resolve the owning candidate's name for a resume, falling back safely."""
+    from app.models import Candidate
+    from app.services.errors import NotFoundError
+    from app.services.resume_service import ResumeService
+
+    resume = ResumeService().get(db, resume_id=resume_id, organization_id=organization_id)
+    if resume is None:
+        raise NotFoundError("Resume was not found.")
+    candidate = db.get(Candidate, resume.candidate_id)
+    if candidate is not None and candidate.full_name:
+        return candidate.full_name
+    return "Extracted Candidate"
 
 
 @router.post(
@@ -249,6 +300,7 @@ def extract_candidate_profile(
     from app.ai.providers import get_provider
     from app.ai.workflows import CandidateProfileExtractionWorkflow
     from app.core.config import settings
+    from app.services.resume_details_service import derive_profile_payload
     from app.services.resume_service import ResumeService
 
     resume_uuid = uuid.UUID(resume_id)
@@ -265,12 +317,14 @@ def extract_candidate_profile(
         settings,
         provider="fake",
         model="fake-model",
-        structured_payload={
-            "full_name": "Extracted Candidate",
-            "summary": "Extracted from the supplied resume text.",
-            "skills": [],
-            "experience": [],
-        },
+        structured_payload=derive_profile_payload(
+            full_name=_candidate_name_for_resume(
+                db,
+                resume_id=resume_uuid,
+                organization_id=ctx.organization_id,
+            ),
+            resume_text=resume_text,
+        ),
     )
     workflow = CandidateProfileExtractionWorkflow(provider)
     result = workflow.run(
@@ -336,25 +390,58 @@ def _run_candidate_evaluation(
     from app.ai.providers import get_provider
     from app.ai.workflows import CandidateEvaluationWorkflow
     from app.core.config import settings
+    from app.models import JobApplication
+    from app.services.errors import NotFoundError, ValidationError
+    from app.services.job_profile_service import JobProfileService
+    from app.services.job_service import JobService
+    from app.services.resume_details_service import (
+        derive_evidence_payload,
+        derive_explanation_payload,
+    )
+    from app.services.resume_service import ResumeService
 
+    application = db.get(JobApplication, application_id)
+    if application is None:
+        raise NotFoundError("JobApplication was not found.")
+    if application.organization_id != organization_id:
+        raise ValidationError("JobApplication belongs to a different organization.")
+    job = JobService().get(db, job_id=application.job_id, organization_id=organization_id)
+    approved_profile = None
+    for profile in JobProfileService().list_versions(
+        db, job_id=application.job_id, organization_id=organization_id
+    ):
+        if profile.status == "approved":
+            approved_profile = profile
+    requirements = (
+        approved_profile.profile_data.get("requirements") if approved_profile is not None else []
+    )
+    resume = ResumeService().get(
+        db,
+        resume_id=application.resume_id,
+        organization_id=organization_id,
+    )
+    resume_text = (resume.extracted_text or None) if resume is not None else None
+
+    evidence_payload = derive_evidence_payload(
+        resume_text=resume_text,
+        requirements=requirements,
+    )
+    explanation_payload = derive_explanation_payload(
+        job_title=job.title,
+        requirements=requirements,
+        evidence_payload=evidence_payload,
+    )
     evidence_provider = get_provider(
         settings,
         provider="fake",
         model="fake-evidence-model",
-        structured_payload={
-            "evidence_items": [],
-            "schema_version": "1.2",
-        },
+        structured_payload=evidence_payload,
     )
     explanation_provider = get_provider(
         settings,
         provider="fake",
         model="fake-explanation-model",
-        structured_payload={
-            "summary": "Evaluation completed.",
-            "points": [],
-            "schema_version": "1.1",
-        },
+        structured_payload=explanation_payload,
     )
     workflow = CandidateEvaluationWorkflow(
         evidence_provider=evidence_provider,

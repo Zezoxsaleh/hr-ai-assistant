@@ -37,6 +37,29 @@ def _ensure_test_database_exists(test_database_url: str) -> None:
         admin_engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _force_fake_ai_provider() -> Generator[None, None, None]:
+    """Keep the whole suite on FakeAIProvider.
+
+    ``backend/.env`` ships with ``AI_PROVIDER=soal`` for dev/demo use, which
+    would otherwise resolve every ``get_provider(settings, provider="fake",
+    ...)`` call to the real ``SoalProvider`` and make the suite depend on a
+    live gate. Pinning the singleton ``settings.ai_provider`` to ``"fake"``
+    keeps automated tests hermetic and deterministic; the dev server (reading
+    the same ``.env`` at startup) still uses Soal. Tests that need a real
+    provider construct their own ``Settings(...)`` explicitly and are marked
+    ``soal`` (skipped unless ``SOAL_API_KEY`` is exported as an env var).
+    """
+    from app.core.config import settings
+
+    original = settings.ai_provider
+    settings.ai_provider = "fake"
+    try:
+        yield
+    finally:
+        settings.ai_provider = original
+
+
 @pytest.fixture(scope="session")
 def test_engine() -> Generator[Engine, None, None]:
     _ensure_test_database_exists(settings.test_database_url)

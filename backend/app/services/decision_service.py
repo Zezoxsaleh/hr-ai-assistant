@@ -13,6 +13,10 @@ authoritative decision vocabulary from the ``hr_decisions`` CHECK constraint and
 preserves append-only history: every call inserts a new row and never mutates
 prior decisions, the CandidateEvaluation, or any JobProfile/CandidateProfile.
 
+Recording a decision also mirrors it into the application's pipeline status so
+the org-wide talent pool (hold/advanced candidates) reflects real HR actions:
+``advance`` → ``advanced``, ``hold`` → ``hold``, ``reject`` → ``rejected``.
+
 This service never commits (the caller owns the transaction), never calls an AI
 provider or workflow, never computes a score or recommendation, and records no
 workflow/AI traces.
@@ -28,6 +32,14 @@ from app.models import CandidateEvaluation, HRDecision, JobApplication, User
 from app.services.errors import NotFoundError, ValidationError
 
 VALID_DECISIONS = frozenset({"advance", "reject", "hold"})
+
+# The pipeline status each HR decision moves the application into. These values
+# are the authoritative ``job_applications.status`` vocabulary.
+DECISION_TO_STATUS = {
+    "advance": "advanced",
+    "hold": "hold",
+    "reject": "rejected",
+}
 
 
 def _validate_decision(decision: str) -> None:
@@ -79,6 +91,9 @@ class DecisionService:
             reason=reason,
         )
         db.add(decision_row)
+        # Mirror the decision into the application's pipeline status so the
+        # talent pool (hold/advanced) reflects the HR action immediately.
+        application.status = DECISION_TO_STATUS[decision]
         db.flush()
         return decision_row
 
