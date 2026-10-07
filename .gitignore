@@ -20,8 +20,9 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+coverage/
 
-# IDE/editor files
+# IDE and editor files
 .idea/
 .vscode/
 *.swp
@@ -32,9 +33,16 @@ htmlcov/
 Thumbs.db
 desktop.ini
 
-# Runtime-generated data (uploaded CVs, temp outputs)
+# Logs and runtime data
+*.log
 backend/storage/
+storage/
 
 # Node / frontend build artifacts
 node_modules/
 dist/
+build/
+
+# Local archives and snapshots
+archive/
+checkpoint_snapshots/
