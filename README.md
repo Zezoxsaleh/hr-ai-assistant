@@ -1,245 +1,189 @@
-# HERA — AI HR Recruitment Assistant
+# HERA — AI-assisted recruitment and employee lifecycle
 
-[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688.svg?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/Frontend-React_19_%2B_Vite-61DAFB.svg?style=flat-square&logo=react&logoColor=black)](https://react.dev)
-[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL_16-336791.svg?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
-[![Docker](https://img.shields.io/badge/Container-Docker_Compose-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+HERA helps HR teams manage jobs, CV screening, candidate evidence, interviews,
+and hiring workflows. AI can extract information and propose evidence; approved
+backend rules calculate match scores, and a human recruiter remains responsible
+for every hiring decision.
 
-**HERA (Human-in-the-Loop Evaluator & Recruitment Assistant)** is an enterprise-grade AI recruiting platform designed to streamline and automate high-volume CV screening while guaranteeing that **human recruiters retain ultimate authority over every consequential hiring decision**.
+## Project status
 
-The platform extracts structured candidate profiles from CVs, deterministically calculates match scores against approved job criteria, extracts granular evidence, and provides conversational AI recruitment assistance—with zero hallucinated scoring.
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Authentication and role-aware access | Implemented | Local login, token handling, admin/recruiter roles, organization scoping. |
+| Job management | Implemented | Create/edit jobs, extract and review structured job profiles, approval workflow, and source-grounded job-profile quality notes. |
+| CV intake and screening | Implemented | PDF/DOCX upload, asynchronous batches, text extraction, candidate profiles, evidence verification, deterministic score, retryable item failures, and review links. |
+| Screening progress | Implemented | The UI polls the batch API automatically and reports progress from terminal item counts; no simulated per-file progress. |
+| Candidate review and HR decisions | Implemented | Requirement-level evidence and limitations are shown separately from human Advance/Hold/Reject decisions. |
+| Candidate pool and matching | Implemented | Job-scoped matching results and comparison for candidates evaluated against the same job; internal talent pool search uses stored profile skills. |
+| Interviews | Implemented | Scheduling, availability/conflict handling, generated question sets with review guides, and interviewer feedback. External calendar synchronization is not included. |
+| Dashboard and analytics | Implemented | Operational overview and reporting use backend data; definitions and filters depend on the selected view. |
+| HERA assistant chat | Implemented | Conversational recruitment support uses the existing authorized backend workflow; it does not make hiring decisions. |
+| AI activity and audit history | Implemented | Workflow traces, provider activity, and audit records are available to authorized users. |
+| Candidate-facing portal | Partial | Invitation-related API support exists; this is not a complete self-service career site. |
+| Employee onboarding/lifecycle | Not implemented | Post-hire employee records, onboarding tasks, and lifecycle administration remain future work. |
+| LinkedIn sourcing, external ATS, email/calendar sync | Not implemented | Requires approved integrations, permissions, and product decisions. HERA does not scrape LinkedIn. |
+| Candidate communication drafts and cross-job rediscovery | Planned | Do not assume automated messaging or broad rediscovery is available. |
 
----
+The implementation is an evolving pre-production MVP. See
+[`docs/roadmap.md`](docs/roadmap.md) for phase status and
+[`docs/development-rules.md`](docs/development-rules.md) for the required
+PLAN → APPROVAL → IMPLEMENT → TEST → REVIEW → COMMIT workflow.
 
-## Architecture & System Overview
+## How CV screening works
 
-![System Architecture](docs/assets/mermaid-diagram.png)
+1. An authorized recruiter selects a job with an approved job profile and uploads PDF/DOCX CVs.
+2. The API stores the files and creates a screening batch. The backend worker, enabled by default, claims queued items and processes them independently.
+3. The configured AI provider extracts a candidate profile and proposes requirement-level evidence. Positive evidence is checked against the extracted source text using exact-quote verification.
+4. Backend scoring applies the existing approved requirement weights and evidence values. The model does not choose the score or the HR decision.
+5. The frontend polls batch status every two seconds while items remain queued or running. It updates the progress bar and per-file status from the API response; completed items show their score and a direct review action without requiring a page refresh.
 
-### Key Architectural Tenet: Human-in-the-Loop & Deterministic Scoring
-Unlike naive AI screening tools that ask LLMs to assign arbitrary numbers, HERA strictly decouples **qualitative extraction** from **quantitative scoring**:
+The progress percentage is `(done + failed + duplicate + cancelled) / total files`.
+It reflects files that reached a final state, not a model's internal token-level
+progress. Failed items are reported separately and can be retried when allowed.
+If the UI remains queued, check that the backend is running, `ENABLE_SCREENING_WORKER`
+is not disabled, the database is reachable, and backend logs show the worker
+started. A progress bar cannot make a stopped worker process a queue.
 
-1. **LLM Role (Qualitative Only)**: Extracts structured entities from unstructured CV text and evaluates evidence matching (`matched`, `partial`, `missing`) for each specific job requirement.
-2. **Python Engine (Deterministic Scoring v1.0)**: Computes the candidate match score (0–100) using locked mathematical weights:
-   $$\text{Score} = \frac{\sum (\text{weight} \times \text{evidence\_value})}{\sum (\text{weights of all approved requirements})} \times 100$$
-   - **Category Weights**: `must_have = 3`, `important = 2`, `nice_to_have = 1`
-   - **Evidence Values**: `matched = 1.0`, `partial = 0.5`, `missing = 0.0`
-3. **Recruiter Role (Final Decision Gate)**: The AI presents an evidence bundle and suggested highlights. The HR recruiter makes the binding decision (`advance`, `hold`, or `reject`).
+## Requirements
 
----
+- Python 3.11 or newer.
+- Node.js and npm supported by the installed Vite toolchain.
+- PostgreSQL 16 for normal local development and the backend test suite.
+- Docker Desktop / Docker Engine for the Postgres service or full Compose setup.
+- For real AI screening: an authorized Ollama Cloud API key. Fake provider mode is available for offline deterministic development and tests.
 
-## Core Capabilities
+## Quick start — Windows PowerShell
 
-- **Automated CV Ingestion & Parsing**: Native text extraction from PDF and DOCX files.
-- **Structured Job & Candidate Profiles**: Automatic entity extraction into canonical JSON schemas with versioning and approval workflows.
-- **Evidence-Based Matching**: Per-requirement breakdown showing exact evidence snippets from the resume alongside match confidence.
-- **Candidate Pool & Talent Pool**: Multi-tiered search, filtering, and cross-organization candidate discovery.
-- **Interview Suite**: Full interview lifecycle management, panel selection, scheduling, and structured feedback collection.
-- **Adaptive Interview Questions**: Dynamic question generation tailored specifically to candidate skill gaps and requirements.
-- **HERA Assistant (Chatbot)**: Conversational assistant utilizing an authorized plan-tool-compose pipeline operating over live recruitment data.
-- **Full Observability & Auditing**: End-to-end tracing of all workflow runs, individual pipeline steps, and LLM requests with latency tracking.
+From the repository root:
 
----
-
-## Technology Stack
-
-| Layer | Technologies |
-| :--- | :--- |
-| **Backend** | Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Pydantic v2, Uvicorn |
-| **Frontend** | React 19, Vite, React Router v7, Axios, Recharts, Lucide Icons |
-| **Database** | PostgreSQL 16 with 11 versioned schema migrations |
-| **AI Providers** | Multi-provider abstraction (`FakeAIProvider` for offline deterministic runs, `SoalProvider` / `GeminiProvider` via OpenAI-compatible API) |
-| **Infrastructure** | Multi-stage Dockerfiles, Nginx Reverse Proxy, Docker Compose |
-| **Tooling** | PowerShell automated runbooks (`tools/`), Pytest, Ruff |
-
----
-
-## Repository Structure
-
-```text
-├── backend/                        # FastAPI application
-│   ├── alembic/                    # Database migrations (001_core to 011_chat)
-│   ├── app/
-│   │   ├── ai/                     # AI contracts, providers, workflows, and tools
-│   │   ├── api/v1/                 # REST API endpoints (20+ resource routers)
-│   │   ├── core/                   # Application config and database engine
-│   │   ├── models/                 # SQLAlchemy ORM models
-│   │   └── services/               # Core business and scoring logic
-│   ├── tests/                      # Comprehensive test suite (API, units, workflows)
-│   ├── Dockerfile                  # Production container definition
-│   └── pyproject.toml              # Dependencies and tool configurations
-├── frontend/
-│   └── frontend_last/              # Canonical React 19 + Vite web client
-│       ├── src/
-│       │   ├── components/         # Shared UI, Layout, Dashboard, and Chatbot
-│       │   ├── pages/              # Jobs, Candidates, Screening, Review, etc.
-│       │   ├── services/           # Typed API client services
-│       │   └── types/              # Backend API wire contracts
-│       ├── Dockerfile              # Multi-stage production build (Node + Nginx)
-│       └── nginx.conf              # SPA routing and API reverse-proxy configuration
-├── docs/                           # Documentation and references
-│   ├── assets/                     # Architecture diagrams and visual assets
-│   ├── notes/                      # Historical prompt engineering and roadmap notes
-│   ├── references/                 # Service handoff contracts and specifications
-│   ├── architecture.md             # In-depth architectural blueprint
-│   ├── ai-contract-schema.md       # JSON schemas for AI integrations
-│   └── product-requirements.md     # PRD and functional specifications
-├── tools/                          # Automated Windows PowerShell runbooks
-│   ├── start_backend.ps1           # Launches local FastAPI on :8000
-│   ├── start_frontend.ps1          # Launches local Vite client on :5174
-│   ├── run_tests.ps1               # Executes test suites
-│   └── e2e_screening_flow.py       # Live end-to-end integration test harness
-└── docker-compose.yml              # Complete multi-container orchestration
+```powershell
+docker compose up -d postgres
+Copy-Item backend\.env.example backend\.env
+python -m venv backend\.venv
 ```
 
----
+Edit `backend\.env` before starting the backend:
 
-## Getting Started
+- Set a private, high-entropy `JWT_SECRET_KEY` of at least 32 characters.
+- For the configured Ollama Cloud model, set `AI_PROVIDER=ollama`, add `OLLAMA_API_KEY`, and keep or change `OLLAMA_BASE_URL` and `OLLAMA_MODEL` as needed.
+- Keep `DATABASE_URL` pointed at the local `hr_ai_assistant` database. Do not point test configuration at it.
 
-### Option 1: One-Command Docker Setup (Recommended)
+Start the backend in its own PowerShell window:
 
-Run the full stack (PostgreSQL, FastAPI Backend, and Nginx Frontend) with Docker Compose:
+```powershell
+Set-Location backend
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+alembic upgrade head
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/Zezoxsaleh/hr-ai-assistant.git
-cd hr-ai-assistant
+The worker starts in the backend process unless `ENABLE_SCREENING_WORKER=false`.
 
-# 2. Copy the root environment file
-cp .env.example .env
+Start the frontend in another PowerShell window:
 
-# 3. Start all services
+```powershell
+Set-Location frontend\frontend_last
+Copy-Item .env.example .env
+npm install
+npm run dev -- --host 127.0.0.1 --port 5174
+```
+
+Open <http://127.0.0.1:5174>. API docs are at <http://127.0.0.1:8000/docs>;
+the health endpoint is <http://127.0.0.1:8000/api/v1/health>.
+
+### Admin account
+
+Create an administrator through the supported CLI after migrations have run.
+The command prompts for a password without printing it:
+
+```powershell
+Set-Location backend
+hera-admin --org-name "Your Organization" --email "admin@example.com" --full-name "HERA Admin"
+```
+
+Use a separate, authorized recruiter account for HR workflow checks. Do not put
+passwords or tokens in source control, shell history, screenshots, or logs.
+
+## Full stack with Docker Compose
+
+The Compose stack runs PostgreSQL, the FastAPI application (including its
+screening worker), and the canonical frontend:
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env and set a strong JWT_SECRET_KEY before exposing the app.
 docker compose up --build -d
 ```
 
-- **Web Application**: Open [http://localhost:8080](http://localhost:8080)
-- **API Documentation**: Open [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Health Check**: Open [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health)
+Open <http://localhost:8080> and <http://localhost:8000/docs>. Compose defaults
+to `AI_PROVIDER=fake` so it can run without cloud credentials. To use Ollama,
+set `AI_PROVIDER=ollama` and `OLLAMA_API_KEY` in the root `.env`; Compose passes
+the provider settings to the backend. Never commit either `.env` file.
 
----
+## Configuration
 
-### Option 2: Local Development Setup
+Backend settings are loaded from `backend/.env` for local runs. In Compose,
+settings are supplied by the root `.env` and `docker-compose.yml`.
 
-#### 1. Database (PostgreSQL)
-Ensure Docker is running, then start only PostgreSQL:
-```bash
-docker compose up -d postgres
-```
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Application PostgreSQL connection. |
+| `TEST_DATABASE_URL` | Separate disposable test database; test setup recreates its tables. |
+| `STORAGE_ROOT_DIR` | Backend file storage root (default: `backend/storage`). |
+| `AI_PROVIDER` | `ollama`, `soal`, or `fake`. |
+| `OLLAMA_API_KEY`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | Ollama Cloud access and model; default model is `gemma4:31b`. |
+| `SOAL_API_KEY`, `SOAL_BASE_URL`, `SOAL_MODEL` | Optional Soal-compatible provider configuration. |
+| `JWT_SECRET_KEY` | Required signing secret; use a unique high-entropy value outside tests. |
+| `ENABLE_SCREENING_WORKER` | Enables the embedded batch worker; defaults to `true`. |
+| `VITE_API_BASE_URL` | Frontend API base, including `/api/v1`; local proxy default is `/api/v1`. |
 
-#### 2. Backend (FastAPI)
-```bash
-cd backend
+The frontend only uses `VITE_*` variables. AI credentials belong on the backend
+and must never be prefixed with `VITE_`.
 
-# Create virtual environment
-python -m venv .venv
-# Activate on Windows:
-.venv\Scripts\activate
-# Activate on Linux/macOS:
-source .venv/bin/activate
+## Tests and quality checks
 
-# Install dependencies in editable mode
-pip install -e ".[dev]"
-
-# Configure environment
-copy .env.example .env
-
-# Apply database migrations
-alembic upgrade head
-
-# Run backend server
-uvicorn app.main:app --reload --port 8000
-```
-
-#### 3. Frontend (React 19 + Vite)
-```bash
-cd frontend/frontend_last
-
-# Install dependencies
-npm install
-
-# Copy environment configuration
-copy .env.example .env
-
-# Start development server
-npm run dev
-```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
----
-
-### Option 3: PowerShell Runbooks (Windows)
-
-Automated scripts are available under `tools/` to manage background instances and logs:
+Frontend, from `frontend/frontend_last/`:
 
 ```powershell
-# Start FastAPI backend on :8000
-.\tools\start_backend.ps1
-
-# Start Frontend client on :5174 connected to local backend
-.\tools\start_frontend.ps1 5174 http://localhost:8000/api/v1
-
-# Run the live End-to-End screening validation harness
-python tools\e2e_screening_flow.py
-```
-
----
-
-## Environment Variables
-
-### Root / Docker Compose (`.env`)
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `POSTGRES_DB` | `hr_ai_assistant` | PostgreSQL database name |
-| `POSTGRES_USER` | `hr_ai_assistant` | Database user |
-| `POSTGRES_PASSWORD` | `change-me` | Database password |
-| `AI_PROVIDER` | `fake` | AI provider (`fake` for offline tests, `soal` for live LLM) |
-| `SOAL_API_KEY` | *(empty)* | API key for Soal/OpenAI gateway (required if `AI_PROVIDER=soal`) |
-| `SOAL_BASE_URL` | `https://soal.help/api/v1` | LLM Gateway Base URL |
-| `SOAL_MODEL` | `gemini-3.5-flash` | Model identifier |
-| `FRONTEND_PORT` | `8080` | Host port exposing the React frontend |
-
-### Backend (`backend/.env`)
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `APP_NAME` | `AI HR Recruitment Assistant` | Application display name |
-| `APP_ENV` | `development` | Runtime environment (`development`, `production`) |
-| `DEBUG` | `true` | FastAPI debug mode |
-| `API_V1_PREFIX` | `/api/v1` | Prefix for REST endpoints |
-| `DATABASE_URL` | `postgresql+psycopg://...` | Connection URI for PostgreSQL |
-| `STORAGE_ROOT_DIR` | `./storage` | Directory storing uploaded CV attachments |
-| `MAX_UPLOAD_BYTES` | `5000000` | Maximum file upload size limit (5MB) |
-
----
-
-## Testing & Quality Assurance
-
-Run all test suites and style linters:
-
-```bash
-# Backend unit and integration tests
-cd backend
-pytest
-
-# Code style and formatting checks
-ruff check .
-ruff format --check .
-
-# Frontend linter and production build verification
-cd ../frontend/frontend_last
+npm test
 npm run lint
 npm run build
 ```
 
----
+Backend, from `backend/`:
 
-## Security & Privacy Guidelines
+```powershell
+pytest -m "not soal" -q
+ruff check .
+ruff format --check .
+```
 
-- **No Secrets in Version Control**: `.env` and credential files are strictly excluded via `.gitignore`.
-- **Identity Isolation**: Multi-tenant isolation is enforced at the controller and database level using `X-Organization-Id` and `X-User-Id` headers.
-- **Untrusted CV Content**: All uploaded files are sanitized and processed in-memory through standard text extractors (`pypdf`, `python-docx`) without executing external macros.
+Backend tests use `TEST_DATABASE_URL` and recreate the tables in that database.
+Before testing, verify it names a disposable database distinct from
+`DATABASE_URL`; never run the suite against development or production data.
+Live provider and Ollama quality evaluations are opt-in and should use synthetic
+CVs only. Ordinary pytest must not make live model calls.
 
----
+## Repository layout
+
+- `backend/` — FastAPI routes, services, AI provider/workflows, worker, models, migrations, and tests.
+- `frontend/frontend_last/` — canonical React/Vite application.
+- `tools/` — Windows runbooks, synthetic quality runners, and screening validation utilities.
+- `docs/` — architecture, product requirements, development rules, design direction, and roadmap.
+- `backend/storage/` — runtime upload storage; never commit generated candidate files.
+
+`frontend/app` is a manual-test harness; it is not the canonical frontend.
+`n8n_workflow.json` and `docs/HERA_system_flow.html` are legacy/reference
+artifacts and are not runtime architecture.
+
+## Security and data handling
+
+- Never commit `.env`, API keys, passwords, JWTs, local databases, uploaded CVs, or provider responses containing private data.
+- Use synthetic CVs for provider testing. Do not send candidate data to a provider unless the organization has authorized that processing.
+- CV text is untrusted input. AI output is validated, positive evidence must quote source text, and hiring decisions remain under human control.
+- Keep `DATABASE_URL` and `TEST_DATABASE_URL` separate. The test database is disposable.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See [`LICENSE`](LICENSE).

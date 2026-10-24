@@ -34,9 +34,7 @@ class CandidateProfileService:
             raise ValidationError(f"Invalid candidate profile status: {status!r}.")
         if source not in VALID_SOURCES:
             raise ValidationError(f"Invalid candidate profile source: {source!r}.")
-        resume = self._get_resume(db, resume_id=resume_id)
-        if organization_id is not None and resume.candidate.organization_id != organization_id:
-            raise ValidationError("Resume does not belong to the expected organization.")
+        resume = self._get_resume(db, resume_id=resume_id, organization_id=organization_id)
 
         version_number = self._next_version_number(db, resume_id=resume_id)
         if make_current:
@@ -70,7 +68,7 @@ class CandidateProfileService:
             organization_id is not None
             and profile.resume.candidate.organization_id != organization_id
         ):
-            raise ValidationError("CandidateProfile does not belong to the expected organization.")
+            raise NotFoundError("CandidateProfile was not found.")
         return profile
 
     def list_versions(
@@ -81,9 +79,7 @@ class CandidateProfileService:
         organization_id: uuid.UUID | None = None,
     ) -> list[CandidateProfile]:
         """Return all candidate profile versions for a resume ordered by version number."""
-        resume = self._get_resume(db, resume_id=resume_id)
-        if organization_id is not None and resume.candidate.organization_id != organization_id:
-            raise ValidationError("Resume does not belong to the expected organization.")
+        resume = self._get_resume(db, resume_id=resume_id, organization_id=organization_id)
         return list(
             db.scalars(
                 select(CandidateProfile)
@@ -106,9 +102,13 @@ class CandidateProfileService:
             return current_versions[-1]
         return versions[-1] if versions else None
 
-    def _get_resume(self, db: Session, *, resume_id: uuid.UUID) -> Resume:
+    def _get_resume(
+        self, db: Session, *, resume_id: uuid.UUID, organization_id: uuid.UUID | None = None
+    ) -> Resume:
         resume = db.get(Resume, resume_id)
         if resume is None:
+            raise NotFoundError("Resume was not found.")
+        if organization_id is not None and resume.candidate.organization_id != organization_id:
             raise NotFoundError("Resume was not found.")
         return resume
 

@@ -35,6 +35,10 @@ desktop.ini
 
 # Logs and runtime data
 *.log
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
 backend/storage/
 storage/
 

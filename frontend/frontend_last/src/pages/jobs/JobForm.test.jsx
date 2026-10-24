@@ -69,7 +69,7 @@ describe("JobForm AI-assisted creation", () => {
       screen.getByLabelText(/Description/),
       "Backend Engineer, engineering, remote, 5+ years, Python"
     );
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
 
     await waitFor(() => expect(suggestJobDraft).toHaveBeenCalledTimes(1));
     expect(suggestJobDraft).toHaveBeenCalledWith(
@@ -85,7 +85,7 @@ describe("JobForm AI-assisted creation", () => {
       screen.getByLabelText(/Description/),
       "Backend Engineer, engineering, remote, 5+ years, Python"
     );
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
 
     await waitFor(() => expect(suggestJobDraft).toHaveBeenCalled());
     expect(screen.getByLabelText(/Job Title/)).toHaveValue("Backend Engineer");
@@ -96,7 +96,7 @@ describe("JobForm AI-assisted creation", () => {
     expect(screen.getByLabelText(/Requirements/)).toHaveDisplayValue("Design APIs\nWrite tests");
     expect(screen.getByLabelText(/Required Skills/)).toHaveDisplayValue("Python, FastAPI");
     expect(formChips(container)).toBe(7);
-    expect(screen.getByRole("status").textContent).toContain("HERA filled");
+    expect(screen.getByRole("status").textContent).toContain("HERA suggested values");
   });
 
   test("does not overwrite fields the user already typed", async () => {
@@ -108,7 +108,7 @@ describe("JobForm AI-assisted creation", () => {
       screen.getByLabelText(/Description/),
       "Backend Engineer, engineering, remote, 5+ years, Python"
     );
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
 
     await waitFor(() => expect(suggestJobDraft).toHaveBeenCalled());
     expect(screen.getByLabelText(/Job Title/)).toHaveValue("My Custom Title");
@@ -123,7 +123,7 @@ describe("JobForm AI-assisted creation", () => {
       screen.getByLabelText(/Description/),
       "Backend Engineer, engineering, remote, 5+ years, Python"
     );
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
     await waitFor(() => expect(formChips(container)).toBe(7));
 
     const department = screen.getByLabelText(/Department/);
@@ -141,9 +141,10 @@ describe("JobForm AI-assisted creation", () => {
       screen.getByLabelText(/Description/),
       "Backend Engineer"
     );
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/Network down/));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/entries are unchanged/i));
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/Network down/);
     expect(screen.getByLabelText(/Job Title/)).toHaveValue("");
     expect(formChips(container)).toBe(0);
   });
@@ -162,10 +163,74 @@ describe("JobForm AI-assisted creation", () => {
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText(/Description/), "A vague listing");
-    await user.click(screen.getByRole("button", { name: /Fill with HERA/ }));
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
 
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/did not detect/));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/could not suggest values/i));
     expect(screen.getByLabelText(/Job Title/)).toHaveValue("");
+  });
+
+  test("preserves edits made while a HERA suggestion request is pending", async () => {
+    let resolveSuggestion;
+    suggestJobDraft.mockReturnValue(new Promise((resolve) => { resolveSuggestion = resolve; }));
+    renderForm();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByLabelText(/Description/), "Backend Engineer role");
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
+    await user.type(screen.getByLabelText(/Job Title/), "My title while HERA reads");
+
+    resolveSuggestion({ ...DEFAULT_SUGGESTION });
+
+    await waitFor(() => expect(screen.getByLabelText(/Department/)).toHaveValue("engineering"));
+    expect(screen.getByLabelText(/Job Title/)).toHaveValue("My title while HERA reads");
+  });
+
+  test("does not apply suggestions from a description changed while the request is pending", async () => {
+    let resolveSuggestion;
+    suggestJobDraft.mockReturnValue(new Promise((resolve) => { resolveSuggestion = resolve; }));
+    renderForm();
+    const user = userEvent.setup();
+    const description = screen.getByLabelText(/Description/);
+
+    await user.type(description, "Old role details");
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
+    await user.clear(description);
+    await user.type(description, "Updated role details");
+    resolveSuggestion({ ...DEFAULT_SUGGESTION });
+
+    expect(await screen.findByText(/description changed/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Job Title/)).toHaveValue("");
+  });
+
+  test("preserves an explicitly selected Full-time employment type", async () => {
+    renderForm();
+    const user = userEvent.setup();
+    const employmentType = screen.getByLabelText(/Employment Type/);
+
+    await user.selectOptions(employmentType, "Part-time");
+    await user.selectOptions(employmentType, "Full-time");
+    await user.type(screen.getByLabelText(/Description/), "Contract Backend Engineer");
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
+
+    await waitFor(() => expect(suggestJobDraft).toHaveBeenCalled());
+    expect(employmentType).toHaveValue("Full-time");
+  });
+
+  test("explains when all fillable fields already have values", async () => {
+    renderForm();
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/Job Title/), "Backend Engineer");
+    await user.type(screen.getByLabelText(/Department/), "Engineering");
+    await user.type(screen.getByLabelText(/Location/), "Remote");
+    await user.selectOptions(screen.getByLabelText(/Employment Type/), "Contract");
+    await user.type(screen.getByLabelText(/Experience/), "5 years");
+    await user.type(screen.getByLabelText(/Description/), "Role description");
+    await user.type(screen.getByLabelText(/Requirements/), "Build APIs");
+    await user.type(screen.getByLabelText(/Required Skills/), "Python");
+    await user.click(screen.getByRole("button", { name: /Suggest fields with HERA/ }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/no blank fields/i);
+    expect(suggestJobDraft).not.toHaveBeenCalled();
   });
 
   test("saving a job keeps the form open; Analyze navigates to the job review", async () => {

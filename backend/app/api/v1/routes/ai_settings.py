@@ -1,27 +1,27 @@
 """AI-provider settings management endpoints.
 
-These endpoints let a user view the active AI provider configuration and set or
-clear a runtime Soal API key without restarting the server — primarily as the
-recovery path when the shared env key hits its free-tier rate limit.
+These endpoints let administrators view and verify the active AI provider
+configuration. Credentials are operator-managed through backend environment
+variables and are never returned by the API.
 
 Security notes:
 - The configured key is never echoed back. Responses report only whether a key
   is present and where it came from (``runtime`` / ``environment`` / ``none``).
-- The runtime key lives in memory only (``app.core.runtime_config``) and is
-  cleared on server restart, by design.
+- The environment key is never echoed to clients, by design.
 """
 
 from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.ai.providers import ProviderError, ProviderRateLimitError
 from app.ai.providers.base import TextGenerationRequest
 from app.ai.providers.factory import resolve_ai_config
+from app.ai.providers.ollama_cloud import OllamaCloudProvider
 from app.ai.providers.soal import SoalProvider
-from app.api.v1.deps import RequestContext, get_request_context
+from app.api.v1.deps import RequestContext, require_roles
 from app.api.v1.schemas.ai_settings import (
     AISettingsResponse,
     SetApiKeyRequest,
@@ -29,7 +29,6 @@ from app.api.v1.schemas.ai_settings import (
     VerifyApiKeyResponse,
 )
 from app.core.config import settings
-from app.core.runtime_config import clear_api_key, set_api_key
 
 router = APIRouter()
 
@@ -37,8 +36,12 @@ _VERIFY_PROMPT = "Reply with exactly: OK"
 
 
 @router.get("/settings/ai", response_model=AISettingsResponse)
-def get_ai_settings(_: RequestContext = Depends(get_request_context)) -> AISettingsResponse:
-    """Return the active AI provider configuration (never the key itself)."""
+def get_ai_settings(_: RequestContext = Depends(require_roles("admin"))) -> AISettingsResponse:
+    """Return the active AI provider configuration (never the key itself).
+
+    Restricted to organization administrators. AI configuration is operator-managed
+    via environment variables.
+    """
     config = resolve_ai_config(settings)
     return AISettingsResponse(
         provider=config["provider"],
@@ -50,40 +53,68 @@ def get_ai_settings(_: RequestContext = Depends(get_request_context)) -> AISetti
 
 @router.post("/settings/ai/api-key", response_model=AISettingsResponse)
 def set_ai_api_key(
-    body: SetApiKeyRequest, _: RequestContext = Depends(get_request_context)
+    body: SetApiKeyRequest, _: RequestContext = Depends(require_roles("admin"))
 ) -> AISettingsResponse:
-    """Set a runtime Soal API key override (in-memory, resets on restart)."""
-    set_api_key(body.api_key)
-    return get_ai_settings()
+    """Disabled: Process-wide runtime API key modification is disabled.
+
+    AI provider credentials must be configured by system operators via environment
+    variables to prevent cross-tenant interference.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Runtime AI key modification is disabled. AI provider credentials must be configured by system operators via environment variables.",
+    )
 
 
 @router.delete("/settings/ai/api-key", response_model=AISettingsResponse)
-def clear_ai_api_key(_: RequestContext = Depends(get_request_context)) -> AISettingsResponse:
-    """Remove the runtime API key override."""
-    clear_api_key()
-    return get_ai_settings()
+def clear_ai_api_key(_: RequestContext = Depends(require_roles("admin"))) -> AISettingsResponse:
+    """Disabled: Process-wide runtime API key modification is disabled.
+
+    AI provider credentials must be configured by system operators via environment
+    variables to prevent cross-tenant interference.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Runtime AI key modification is disabled. AI provider credentials must be configured by system operators via environment variables.",
+    )
 
 
 @router.post("/settings/ai/verify", response_model=VerifyApiKeyResponse)
 def verify_ai_api_key(
-    body: VerifyApiKeyRequest | None = None, _: RequestContext = Depends(get_request_context)
+    body: VerifyApiKeyRequest | None = None, _: RequestContext = Depends(require_roles("admin"))
 ) -> VerifyApiKeyResponse:
     """Validate an API key with a minimal live call.
 
-    Accepts an optional ``api_key`` body. When omitted, the active key
-    (runtime override or env) is verified. Returns ``ok=True`` on success and
-    a short human-readable diagnostic on failure instead of raising, so the
-    frontend can surface a friendly inline message.
+    Accepts an optional ``api_key`` body to test a prospective key without
+    modifying server configuration. When omitted, the active environment key
+    is verified. Returns ``ok=True`` on success and a short human-readable
+    diagnostic on failure instead of raising, so the frontend can surface a
+    friendly inline message. Never exposes secrets in responses or logs.
     """
     config = resolve_ai_config(settings)
     api_key = body.api_key.strip() if body and body.api_key else config["api_key"]
-    model = config["model"] or settings.soal_model
+    model = config["model"] or (
+        settings.soal_model if settings.ai_provider == "soal" else settings.ollama_model
+    )
 
     if not api_key:
         return VerifyApiKeyResponse(ok=False, message="No API key configured.", model=model)
 
-    provider = SoalProvider(
-        api_key=api_key, model=model, base_url=config["base_url"] or settings.soal_base_url
+    provider_type = {
+        "soal": SoalProvider,
+        "ollama": OllamaCloudProvider,
+    }.get(config["provider"])
+    if provider_type is None:
+        return VerifyApiKeyResponse(
+            ok=False,
+            message="Select a live AI provider before verifying an API key.",
+            model=model,
+        )
+    provider = provider_type(
+        api_key=api_key,
+        model=model,
+        base_url=config["base_url"]
+        or (settings.soal_base_url if config["provider"] == "soal" else settings.ollama_base_url),
     )
     started = time.monotonic()
     try:

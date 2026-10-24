@@ -69,10 +69,8 @@ class JobService:
     ) -> Job:
         """Return one job by id, enforcing organization scope."""
         job = db.get(Job, job_id)
-        if job is None:
+        if job is None or job.organization_id != organization_id:
             raise NotFoundError("Job was not found.")
-        if job.organization_id != organization_id:
-            raise ValidationError("Job does not belong to the expected organization.")
         return job
 
     def delete(

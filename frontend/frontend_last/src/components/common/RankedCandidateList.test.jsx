@@ -22,12 +22,12 @@ describe("RankedCandidateList", () => {
     const { rerender } = render(
       <RankedCandidateList rows={[{ ...user, score: 87 }]} columns={baseColumns} />
     );
-    // 87 is displayed verbatim, trailing marker characters are not added.
+    // Whole scores retain their concise numeric display.
     expect(screen.getByText("87")).toBeInTheDocument();
 
-    // A string score is passed through untouched (no parsing/rounding here).
+    // Decimal string precision is formatted for display without changing the API value.
     rerender(<RankedCandidateList rows={[{ ...user, score: "87.500" }]} columns={baseColumns} />);
-    expect(screen.getByText("87.500")).toBeInTheDocument();
+    expect(screen.getByText("87.5")).toBeInTheDocument();
 
     // Unscored rows render the "Not scored" placeholder.
     rerender(<RankedCandidateList rows={[{ ...user, score: null }]} columns={baseColumns} />);

@@ -26,6 +26,30 @@ function mapCategory(category) {
   return CATEGORY_DISPLAY[category] || category;
 }
 
+function mapReviewGuide(guide) {
+  if (!guide || typeof guide !== "object") return null;
+  return {
+    purpose: guide.purpose || "",
+    evidenceBasis: guide.evidence_basis || "",
+    sourceQuote: guide.source_quote || null,
+    interviewerLooksFor: guide.interviewer_looks_for || "",
+    evaluationRubric: Array.isArray(guide.evaluation_rubric)
+      ? guide.evaluation_rubric
+      : [],
+  };
+}
+
+function reviewGuidePayload(guide) {
+  if (!guide) return null;
+  return {
+    purpose: guide.purpose,
+    evidence_basis: guide.evidenceBasis,
+    source_quote: guide.sourceQuote || null,
+    interviewer_looks_for: guide.interviewerLooksFor,
+    evaluation_rubric: guide.evaluationRubric,
+  };
+}
+
 function mapQuestion(question) {
   return {
     id: question.id ?? null,
@@ -34,6 +58,7 @@ function mapQuestion(question) {
     text: question.text || "",
     topic: question.topic || "",
     requirementKey: question.requirement_key || null,
+    reviewGuide: mapReviewGuide(question.review_guide),
   };
 }
 
@@ -96,6 +121,7 @@ function questionPayload(questions) {
     text: question.text,
     topic: question.topic || null,
     requirement_key: question.requirementKey || null,
+    review_guide: reviewGuidePayload(question.reviewGuide),
   }));
 }
 
@@ -136,6 +162,7 @@ export async function updateQuestionSet(questionSetId, questions) {
       text: question.text,
       topic: question.topic || null,
       requirement_key: question.requirementKey || null,
+      review_guide: reviewGuidePayload(question.reviewGuide),
     })),
   };
   const { data } = await apiClient.put(`/interview-question-sets/${questionSetId}`, payload);

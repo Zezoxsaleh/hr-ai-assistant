@@ -1,10 +1,17 @@
 import React from "react";
 
-// Generic table. `columns` is [{ key, header, render? }], `data` is an array
-// of row objects. Pass onRowClick to make rows clickable. `header` is an
-// optional node rendered inside the panel above the table (e.g. a panel-title
-// row with its own controls).
-export default function DataTable({ columns, data, onRowClick, emptyLabel = "No data found.", header }) {
+// Generic table with accessible keyboard interaction (UI-01).
+// `columns` is [{ key, header, render? }], `data` is an array of row objects.
+// Pass onRowClick to make rows focusable (tabIndex=0) and operable with Enter/Space keys
+// while preserving valid semantic table structure.
+export default function DataTable({
+  columns,
+  data,
+  onRowClick,
+  emptyLabel = "No data found.",
+  emptyAction,
+  header,
+}) {
   return (
     <div className="panel table-panel">
       {header}
@@ -13,7 +20,7 @@ export default function DataTable({ columns, data, onRowClick, emptyLabel = "No 
           <thead>
             <tr>
               {columns.map((col) => (
-                <th key={col.key}>{col.header}</th>
+                <th key={col.key} scope="col">{col.header}</th>
               ))}
             </tr>
           </thead>
@@ -22,7 +29,15 @@ export default function DataTable({ columns, data, onRowClick, emptyLabel = "No 
               <tr
                 key={row.id ?? i}
                 className={onRowClick ? "clickable" : ""}
+                tabIndex={onRowClick ? 0 : undefined}
                 onClick={() => onRowClick?.(row)}
+                onKeyDown={(e) => {
+                  if (onRowClick && (e.key === "Enter" || e.key === " ")) {
+                    if (e.target.tagName === "BUTTON" || e.target.tagName === "A") return;
+                    e.preventDefault();
+                    onRowClick(row);
+                  }
+                }}
               >
                 {columns.map((col) => (
                   <td key={col.key}>{col.render ? col.render(row) : row[col.key]}</td>
@@ -32,7 +47,12 @@ export default function DataTable({ columns, data, onRowClick, emptyLabel = "No 
           </tbody>
         </table>
       </div>
-      {!data.length && <div className="empty">{emptyLabel}</div>}
+      {!data.length && (
+        <div className="empty">
+          {emptyLabel}
+          {emptyAction}
+        </div>
+      )}
     </div>
   );
 }

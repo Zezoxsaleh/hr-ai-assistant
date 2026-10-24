@@ -4,6 +4,7 @@ import EmptyState from "./EmptyState";
 import ErrorState from "./ErrorState";
 import LoadingSpinner from "./LoadingSpinner";
 import ScoreBadge from "./ScoreBadge";
+import { formatScore, parseScore } from "../../utils/score";
 
 // UI-only presentation scaffold for ranked-candidate lists (Evaluations,
 // Talent Pool, … and — with a configuration/adapter — anything similar).
@@ -72,8 +73,8 @@ export function CandidateCell({ name, subtitle }) {
     <div className="candidate-cell">
       <div className="mini-avatar">{initialsOf(name)}</div>
       <div>
-        <strong>{name}</strong>
-        {subtitle}
+        <strong dir="auto">{name}</strong>
+        {subtitle && <div dir="auto">{subtitle}</div>}
       </div>
     </div>
   );
@@ -82,14 +83,14 @@ export function CandidateCell({ name, subtitle }) {
 // Score display cell. The value is always backend-provided; this never
 // computes, rounds, or piles thresholds on top — it only picks the display
 // style ("badge" = circular ScoreBadge, "text" = plain score number).
-export function ScoreCell({ score, variant = "badge" }) {
-  if (score === null || score === undefined) {
+export function ScoreCell({ score, group, variant = "badge" }) {
+  if (parseScore(score) === null) {
     return <span className="muted-note">Not scored</span>;
   }
   if (variant === "text") {
-    return <strong className="score-text">{score}</strong>;
+    return <strong className="score-text">{formatScore(score, { suffix: "" })}</strong>;
   }
-  return <ScoreBadge value={score} />;
+  return <ScoreBadge value={score} group={group} />;
 }
 
 // Backend-authoritative group pill. The tone/label maps are display-only and
@@ -97,7 +98,7 @@ export function ScoreCell({ score, variant = "badge" }) {
 const GROUP_TONES = {
   must_review: "green",
   consider: "amber",
-  lower_priority: "red",
+  lower_priority: "grey",
 };
 
 const GROUP_LABELS = {
@@ -108,7 +109,7 @@ const GROUP_LABELS = {
 
 export function GroupPill({ group, tones = GROUP_TONES, labels = GROUP_LABELS }) {
   return (
-    <span className={`recommendation recommendation-${tones[group] || "red"}`}>
+    <span className={`recommendation recommendation-${tones[group] || "grey"}`}>
       {labels[group] || group || "—"}
     </span>
   );

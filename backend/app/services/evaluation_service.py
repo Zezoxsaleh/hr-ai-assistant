@@ -38,6 +38,7 @@ class EvaluationService:
         explanation: dict[str, Any] | None = None,
         score_breakdown: dict[str, Any] | None = None,
         scoring_version: str | None = None,
+        evidence_engine_version: str | None = "2.0",
         provenance: dict[str, Any] | None = None,
         organization_id: uuid.UUID | None = None,
         make_current: bool = True,
@@ -50,10 +51,13 @@ class EvaluationService:
             job_application_id=job_application_id,
             organization_id=organization_id,
         )
-        job_profile = self._get_job_profile(db, job_profile_id=job_profile_id)
+        job_profile = self._get_job_profile(
+            db, job_profile_id=job_profile_id, organization_id=application.organization_id
+        )
         candidate_profile = self._get_candidate_profile(
             db,
             candidate_profile_id=candidate_profile_id,
+            organization_id=application.organization_id,
         )
         self._validate_context(
             application=application,
@@ -76,6 +80,7 @@ class EvaluationService:
             explanation=explanation,
             score_breakdown=score_breakdown,
             scoring_version=scoring_version,
+            evidence_engine_version=evidence_engine_version,
             provenance=provenance,
             is_current=make_current,
         )
@@ -98,9 +103,7 @@ class EvaluationService:
             organization_id is not None
             and evaluation.job_application.organization_id != organization_id
         ):
-            raise ValidationError(
-                "CandidateEvaluation does not belong to the expected organization."
-            )
+            raise NotFoundError("CandidateEvaluation was not found.")
         return evaluation
 
     def list_versions(
@@ -185,12 +188,16 @@ class EvaluationService:
         if application is None:
             raise NotFoundError("JobApplication was not found.")
         if organization_id is not None and application.organization_id != organization_id:
-            raise ValidationError("JobApplication does not belong to the expected organization.")
+            raise NotFoundError("JobApplication was not found.")
         return application
 
-    def _get_job_profile(self, db: Session, *, job_profile_id: uuid.UUID) -> JobProfile:
+    def _get_job_profile(
+        self, db: Session, *, job_profile_id: uuid.UUID, organization_id: uuid.UUID | None = None
+    ) -> JobProfile:
         job_profile = db.get(JobProfile, job_profile_id)
         if job_profile is None:
+            raise NotFoundError("JobProfile was not found.")
+        if organization_id is not None and job_profile.job.organization_id != organization_id:
             raise NotFoundError("JobProfile was not found.")
         return job_profile
 
@@ -199,9 +206,15 @@ class EvaluationService:
         db: Session,
         *,
         candidate_profile_id: uuid.UUID,
+        organization_id: uuid.UUID | None = None,
     ) -> CandidateProfile:
         candidate_profile = db.get(CandidateProfile, candidate_profile_id)
         if candidate_profile is None:
+            raise NotFoundError("CandidateProfile was not found.")
+        if (
+            organization_id is not None
+            and candidate_profile.resume.candidate.organization_id != organization_id
+        ):
             raise NotFoundError("CandidateProfile was not found.")
         return candidate_profile
 

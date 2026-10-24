@@ -37,10 +37,8 @@ def generate_interview_question_set(
 
     application_uuid = uuid.UUID(application_id)
     application = db.get(JobApplication, application_uuid)
-    if application is None:
+    if application is None or application.organization_id != ctx.organization_id:
         raise NotFoundError("JobApplication was not found.")
-    if application.organization_id != ctx.organization_id:
-        raise ValidationError("JobApplication belongs to a different organization.")
 
     payload = _derive_question_payload(
         db,
@@ -239,6 +237,20 @@ def _derive_question_payload(db: Session, *, application, organization_id: uuid.
         organization_id=organization_id,
     )
     gaps = service.collect_candidate_gaps(db, application=application)
+
+    def guide(purpose: str, basis: str, looks_for: str) -> dict:
+        return {
+            "purpose": purpose,
+            "evidence_basis": basis,
+            "source_quote": None,
+            "interviewer_looks_for": looks_for,
+            "evaluation_rubric": [
+                "Explains the approach with a clear sequence.",
+                "Uses a concrete example or relevant trade-offs.",
+                "Identifies how success or correctness would be checked.",
+            ],
+        }
+
     questions: list[dict] = []
     for requirement in requirements[:3]:
         questions.append(
@@ -250,6 +262,11 @@ def _derive_question_payload(db: Session, *, application, organization_id: uuid.
                 ),
                 "topic": requirement["text"],
                 "requirement_key": requirement["key"],
+                "review_guide": guide(
+                    f"Explore practical experience with {requirement['text']}.",
+                    "job_requirement",
+                    "A relevant method, example, and trade-offs.",
+                ),
             }
         )
     for skill in skills[:2]:
@@ -257,11 +274,15 @@ def _derive_question_payload(db: Session, *, application, organization_id: uuid.
             {
                 "category": "candidate_specific",
                 "text": (
-                    f"You listed {skill} on your resume — tell me about the most "
-                    "complex thing you built with it."
+                    f"What is your experience with {skill}, and how have you applied it in a project?"
                 ),
                 "topic": skill,
                 "requirement_key": None,
+                "review_guide": guide(
+                    f"Verify the candidate's experience with {skill}.",
+                    "verification_question",
+                    "A specific, technically coherent example from the candidate.",
+                ),
             }
         )
     for gap in gaps[:1]:
@@ -269,11 +290,15 @@ def _derive_question_payload(db: Session, *, application, organization_id: uuid.
             {
                 "category": "candidate_specific",
                 "text": (
-                    f"The role expects experience with {gap}; how would you ramp "
-                    "up quickly if hired?"
+                    f"How would you approach a task that requires {gap}?"
                 ),
                 "topic": gap,
                 "requirement_key": None,
+                "review_guide": guide(
+                    f"Verify the candidate's approach to {gap}.",
+                    "verification_question",
+                    "A practical learning or problem-solving plan, including risks.",
+                ),
             }
         )
     questions.append(
@@ -285,6 +310,11 @@ def _derive_question_payload(db: Session, *, application, organization_id: uuid.
             ),
             "topic": None,
             "requirement_key": None,
+            "review_guide": guide(
+                "Understand how the candidate handles technical disagreement.",
+                "job_requirement",
+                "Listening, evidence-based reasoning, and a constructive outcome.",
+            ),
         }
     )
-    return {"schema_version": "1.1", "questions": questions}
+    return {"schema_version": "1.2", "questions": questions}

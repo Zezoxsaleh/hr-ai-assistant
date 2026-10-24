@@ -1,86 +1,136 @@
-import apiClient from "./apiClient";
 import { getApplications } from "./applicationService";
+import { parseScore } from "../utils/score";
 
-// Analytics service — computed from the same live data as the dashboard.
-// No analytics-specific backend endpoints exist.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RANGE_DAYS = { "30d": 30, "90d": 90 };
+const STATUS_GROUPS = [
+  { stage: "Created", statuses: ["created"] },
+  { stage: "Analysis", statuses: ["analysis_pending", "analyzing", "analysis_failed"] },
+  { stage: "Ready for review", statuses: ["ready_for_review"] },
+  { stage: "Hold", statuses: ["hold"] },
+  { stage: "Advanced", statuses: ["advanced"] },
+  { stage: "Rejected", statuses: ["rejected"] },
+  { stage: "Archived", statuses: ["archived"] },
+];
 
-async function loadData() {
-  const [apps, jobsRes] = await Promise.all([getApplications(), apiClient.get("/jobs")]);
-  return {
-    apps,
-    jobs: Array.isArray(jobsRes.data) ? jobsRes.data : [],
-  };
+function validRange(range) {
+  return Object.hasOwn(RANGE_DAYS, range) ? range : "30d";
 }
 
-function avgScore(apps) {
-  const scored = apps.filter((a) => typeof a.score === "number");
-  if (!scored.length) return null;
-  const mean = scored.reduce((sum, a) => sum + a.score, 0) / scored.length;
-  return Math.round(mean);
+export function filterApplicationsToRange(apps, range = "30d", now = new Date()) {
+  const end = now.getTime();
+  const start = end - RANGE_DAYS[validRange(range)] * DAY_MS;
+  return apps.filter((app) => {
+    const createdAt = Date.parse(app.appliedAt);
+    return Number.isFinite(createdAt) && createdAt >= start && createdAt <= end;
+  });
 }
 
-export async function getAnalyticsMetrics() {
-  const { apps, jobs } = await loadData();
-  const advanced = apps.filter((a) => a.status === "advanced").length;
-  const advanceRate = apps.length ? Math.round((advanced / apps.length) * 100) : 0;
-  const score = avgScore(apps);
+export function filterApplicationsToLast30Days(apps, now = new Date()) {
+  return filterApplicationsToRange(apps, "30d", now);
+}
 
+function buildMetrics(apps, range) {
+  const periodLabel = `last ${RANGE_DAYS[range]} days`;
   const metrics = [
     {
       key: "applications",
-      label: "Applications",
+      label: `Applications · ${periodLabel}`,
       value: apps.length,
-      trend: "up",
-      deltaLabel: apps.length ? "from live API" : "no data yet",
+      deltaLabel: "created in selected period",
     },
     {
-      key: "active_jobs",
-      label: "Active Jobs",
-      value: jobs.filter((j) => j.status === "active").length,
-      trend: "up",
-      deltaLabel: "live",
+      key: "candidates",
+      label: `Candidates with applications · ${periodLabel}`,
+      value: new Set(apps.map((app) => app.candidateId).filter(Boolean)).size,
+      deltaLabel: "unique candidates in selected period",
+    },
+    {
+      key: "advanced_applications",
+      label: `Advanced applications · ${periodLabel}`,
+      value: apps.filter((app) => app.status === "advanced").length,
+      deltaLabel: "current status of in-period applications",
     },
   ];
-  if (score !== null) {
+  const scores = apps.map((app) => parseScore(app.score)).filter((score) => score !== null);
+  if (scores.length) {
+    const average = scores.reduce((sum, score) => sum + score, 0) / scores.length;
     metrics.push({
       key: "avg_score",
-      label: "Average AI Score",
-      value: `${score}%`,
-      trend: "up",
-      deltaLabel: "best candidate score",
+      label: `Average AI score · ${periodLabel}`,
+      value: `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(average)}%`,
+      deltaLabel: "valid scores in selected period",
     });
   }
-  metrics.push({
-    key: "advance_rate",
-    label: "Advance Rate",
-    value: `${advanceRate}%`,
-    trend: "up",
-    deltaLabel: "of applications advanced",
-  });
-
   return metrics;
 }
 
-export async function getAnalyticsFunnel() {
-  const { apps } = await loadData();
-  const sums = {
-    "Applied": 0,
-    "Analysis": 0,
-    "Ready for Review": 0,
-    "Advanced": 0,
-    "Rejected": 0,
-  };
-  for (const a of apps) {
-    if (a.status === "created") sums["Applied"] += 1;
-    else if (["analysis_pending", "analyzing", "analysis_failed"].includes(a.status)) sums["Analysis"] += 1;
-    else if (a.status === "ready_for_review") sums["Ready for Review"] += 1;
-    else if (a.status === "advanced") sums["Advanced"] += 1;
-    else if (a.status === "rejected") sums["Rejected"] += 1;
+function buildStatusBreakdown(apps) {
+  const counts = new Map(STATUS_GROUPS.map(({ stage }) => [stage, 0]));
+  let otherCount = 0;
+  for (const app of apps) {
+    const group = STATUS_GROUPS.find(({ statuses }) => statuses.includes(app.status));
+    if (group) counts.set(group.stage, counts.get(group.stage) + 1);
+    else otherCount += 1;
   }
-  return Object.entries(sums).map(([stage, count]) => ({ stage, count }));
+  if (otherCount) counts.set("Other statuses", otherCount);
+  const total = apps.length;
+  const rows = Array.from(counts, ([stage, count]) => ({
+    stage,
+    count,
+    percent: total ? Number(((count / total) * 100).toFixed(1)) : 0,
+  }));
+  if (total && rows.length) {
+    const roundedTotal = rows.reduce((sum, row) => sum + row.percent, 0);
+    const largestGroup = rows.reduce((largest, row) => row.count > largest.count ? row : largest, rows[0]);
+    largestGroup.percent = Number((largestGroup.percent + 100 - roundedTotal).toFixed(1));
+  }
+  return rows;
 }
 
-// The backend has no candidate-source data; the donut is empty until it does.
+function buildApplicationTrend(apps, range, now) {
+  const days = RANGE_DAYS[range];
+  const periodStart = now.getTime() - days * DAY_MS;
+  const bucketCount = Math.ceil(days / 7);
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
+    const start = periodStart + index * 7 * DAY_MS;
+    return {
+      label: new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(start)),
+      applications: 0,
+    };
+  });
+
+  for (const app of apps) {
+    const createdAt = Date.parse(app.appliedAt);
+    if (!Number.isFinite(createdAt)) continue;
+    const index = Math.floor((createdAt - periodStart) / (7 * DAY_MS));
+    if (index >= 0 && index < buckets.length) buckets[index].applications += 1;
+  }
+  return buckets;
+}
+
+export async function getAnalyticsSnapshot(range = "30d", now = new Date()) {
+  const selectedRange = validRange(range);
+  const apps = filterApplicationsToRange(await getApplications(), selectedRange, now);
+  return {
+    metrics: buildMetrics(apps, selectedRange),
+    statusBreakdown: buildStatusBreakdown(apps),
+    applicationTrend: buildApplicationTrend(apps, selectedRange, now),
+    validApplicationDates: apps.length,
+    range: selectedRange,
+  };
+}
+
+// Kept as small helpers for existing consumers and focused service tests.
+export async function getAnalyticsMetrics(now = new Date()) {
+  return (await getAnalyticsSnapshot("30d", now)).metrics;
+}
+
+export async function getApplicationStatusBreakdown(now = new Date()) {
+  return (await getAnalyticsSnapshot("30d", now)).statusBreakdown;
+}
+
 export async function getCandidateSources() {
-  return [];
+  // No candidate-source endpoint or source data is currently available.
+  return null;
 }

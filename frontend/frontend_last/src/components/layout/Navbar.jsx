@@ -1,27 +1,13 @@
 import React from "react";
-import { Link } from "react-router-dom";
-import { Bell, ShieldCheck } from "lucide-react";
-import useIdentity from "../../hooks/useIdentity";
+import { LogOut, User as UserIcon } from "lucide-react";
+import useAuth from "../../hooks/useAuth";
 import { BRAND } from "../../config/brand";
-
-const TITLES = {
-  "/dashboard": "Dashboard",
-  "/jobs": "Jobs",
-  "/candidates": "Candidates",
-  "/evaluations": "Evaluations",
-  "/applications": "Applications",
-  "/talent-pool": "Talent Pool",
-  "/analytics": "Analytics",
-  "/settings": "Settings",
-};
-
-const short = (value) => (value ? value.slice(0, 8) : "—");
+import { getTitleForPath } from "../../config/routes";
 
 export default function Navbar({ pathname }) {
-  const { identity } = useIdentity();
+  const { user, logout } = useAuth();
 
-  const matchedTitle =
-    Object.entries(TITLES).find(([path]) => pathname.startsWith(path))?.[1] || "Overview";
+  const matchedTitle = getTitleForPath(pathname);
 
   return (
     <header className="topbar">
@@ -31,19 +17,65 @@ export default function Navbar({ pathname }) {
       </div>
 
       <div className="top-actions">
-        <button className="icon-btn" type="button" aria-label="Notifications">
-          <Bell size={19} />
-        </button>
 
-        <Link to="/identity" className="dev-identity-chip" title="Edit Development Identity">
-          <ShieldCheck size={16} />
-          <div>
-            <strong>Development Identity</strong>
-            <span>
-              User {short(identity.userId)} · Org {short(identity.organizationId)}
-            </span>
+        {user && (
+          <div
+            className="user-profile-chip"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              padding: "6px 12px",
+              border: "1px solid #eef2f6",
+              borderRadius: "12px",
+              background: "#f8fafc",
+            }}
+          >
+            <div
+              className="avatar"
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: "50%",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              {user.full_name ? user.full_name.charAt(0).toUpperCase() : <UserIcon size={16} />}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
+              <strong style={{ fontSize: 13, color: "#344054" }}>
+                {user.full_name || user.email}
+              </strong>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <span
+                  style={{
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    fontWeight: 700,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                    background: user.role === "admin" ? "var(--hera-teal-light)" : "#f2f4f7",
+                    color: user.role === "admin" ? "var(--hera-teal)" : "#475467",
+                  }}
+                >
+                  {user.role}
+                </span>
+                <span style={{ fontSize: 11, color: "#98a2b3" }}>{user.email}</span>
+              </div>
+            </div>
           </div>
-        </Link>
+        )}
+
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={logout}
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut size={19} />
+        </button>
       </div>
     </header>
   );

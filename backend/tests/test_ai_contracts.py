@@ -9,8 +9,8 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from app.ai.contracts import (
-    AI_CONTRACT_SCHEMA_VERSION,
     EVIDENCE_CONTRACT_SCHEMA_VERSION,
+    JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
     REQUIREMENT_CATEGORIES,
     REQUIREMENT_DIMENSIONS,
     CandidateProfileExtractionOutput,
@@ -26,8 +26,54 @@ from app.ai.contracts import (
     validate_evaluation_explanation,
     validate_job_profile_extraction,
     validate_match_evidence_list,
+    validate_interview_question_set,
 )
 from app.services.errors import ApplicationError, ValidationError
+
+
+def _valid_interview_question_set(quote: str | None = None) -> dict:
+    return {
+        "schema_version": "1.2",
+        "questions": [
+            {
+                "category": "technical",
+                "text": "How did you use PostgreSQL?",
+                "topic": "PostgreSQL",
+                "requirement_key": requirement_key("PostgreSQL", "must_have"),
+                "review_guide": {
+                    "purpose": "Understand the candidate's practical PostgreSQL experience.",
+                    "evidence_basis": "verified_cv_evidence" if quote else "job_requirement",
+                    "source_quote": quote,
+                    "interviewer_looks_for": "A concrete example and validation approach.",
+                    "evaluation_rubric": ["Clear explanation", "Relevant example"],
+                },
+            }
+        ],
+    }
+
+
+def test_interview_question_contract_requires_exact_quote_for_cv_claim() -> None:
+    exact_quote = "Built PostgreSQL services handling 2M records."
+    result = validate_interview_question_set(
+        _valid_interview_question_set(exact_quote),
+        allowed_keys={requirement_key("PostgreSQL", "must_have")},
+        resume_text=f"Experience: {exact_quote}",
+    )
+    assert result.questions[0].review_guide.source_quote == exact_quote
+
+    with pytest.raises(ValidationError, match="not found verbatim"):
+        validate_interview_question_set(
+            _valid_interview_question_set("Used PostgreSQL at scale."),
+            allowed_keys={requirement_key("PostgreSQL", "must_have")},
+            resume_text=f"Experience: {exact_quote}",
+        )
+
+    with pytest.raises(ValidationError):
+        validate_interview_question_set(
+            _valid_interview_question_set(exact_quote),
+            allowed_keys={requirement_key("PostgreSQL", "must_have")},
+            resume_text=None,
+        )
 
 
 def _valid_requirement() -> dict:
@@ -86,7 +132,7 @@ def _valid_eval_explanation() -> dict:
 def test_valid_job_profile_extraction_output() -> None:
     output = JobProfileExtractionOutput.model_validate(_valid_job_profile())
     assert output.title == "Backend Engineer"
-    assert output.schema_version == AI_CONTRACT_SCHEMA_VERSION
+    assert output.schema_version == JOB_PROFILE_EXTRACTION_SCHEMA_VERSION
     first, second = output.requirements
     assert isinstance(first, JobRequirement)
     assert first.text == "Python"
@@ -453,7 +499,7 @@ def test_invalid_schema_version_rejected(contract_type, data) -> None:
         contract_type.model_validate(data)
 
 
-@pytest.mark.parametrize("version", ["1.0", "1.1"])
+@pytest.mark.parametrize("version", ["1.0", "1.1", "1.2"])
 def test_supported_schema_version_accepted(version) -> None:
     output = JobProfileExtractionOutput.model_validate({"title": "X", "schema_version": version})
     assert output.schema_version == version
@@ -466,6 +512,10 @@ def test_supported_schema_version_accepted(version) -> None:
         "v1.1",
         "V1.1",
         " v1.1 ",
+        "1.2",
+        "v1.2",
+        "V1.2",
+        " v1.2 ",
         "1.0",
         "v1.0",
     ],

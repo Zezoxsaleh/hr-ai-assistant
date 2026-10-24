@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import ChatMessage, ChatThread
@@ -52,10 +52,8 @@ class ChatService:
         organization_id: uuid.UUID,
     ) -> ChatThread:
         thread = db.get(ChatThread, thread_id)
-        if thread is None:
+        if thread is None or thread.organization_id != organization_id:
             raise NotFoundError("ChatThread was not found.")
-        if thread.organization_id != organization_id:
-            raise ValidationError("ChatThread belongs to a different organization.")
         return thread
 
     def list_threads(
@@ -107,8 +105,13 @@ class ChatService:
         content = (content or "").strip()
         if not content:
             raise ValidationError("Chat message content cannot be empty.")
+        max_pos = db.scalar(
+            select(func.max(ChatMessage.position)).where(ChatMessage.chat_thread_id == thread.id)
+        )
+        position = (max_pos or 0) + 1
         message = ChatMessage(
             chat_thread_id=thread.id,
+            position=position,
             role=normalized_role,
             content=content,
             tool_calls=tool_calls,

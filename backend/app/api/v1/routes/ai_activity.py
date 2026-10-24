@@ -56,8 +56,15 @@ def retry_ai_activity_run(
     db: Session = Depends(get_db),
 ):
     """Re-run a failed workflow run against its related entity."""
-    return AIActivityService().retry_run(
-        db,
-        organization_id=ctx.organization_id,
-        workflow_run_id=uuid.UUID(run_id),
-    )
+    from app.services.errors import NotFoundError, ValidationError
+
+    try:
+        return AIActivityService().retry_run(
+            db,
+            organization_id=ctx.organization_id,
+            workflow_run_id=uuid.UUID(run_id),
+        )
+    except ValidationError as err:
+        if "organization" in str(err).lower():
+            raise NotFoundError("Workflow run was not found.") from err
+        raise

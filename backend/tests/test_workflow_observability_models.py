@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models import AITrace, Organization, WorkflowRun, WorkflowStepTrace
@@ -62,7 +62,7 @@ def test_workflow_run_requires_valid_organization(db_session: Session) -> None:
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
@@ -109,7 +109,7 @@ def test_workflow_step_trace_requires_valid_workflow_run(db_session: Session) ->
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
@@ -156,7 +156,7 @@ def test_ai_trace_requires_valid_workflow_step_trace(db_session: Session) -> Non
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 

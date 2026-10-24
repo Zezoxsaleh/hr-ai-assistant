@@ -197,10 +197,10 @@ export default function InterviewQuestions() {
       <div className="section-head">
         <div>
           <p className="eyebrow">INTERVIEW PREP</p>
-          <h3>
+          <h2>
             Interview Questions{candidate ? ` — ${candidate.name}` : ""}
             {applicationId && job?.title ? ` · ${job.title}` : ""}
-          </h3>
+          </h2>
         </div>
         <span className="count">{selected.size} selected</span>
       </div>

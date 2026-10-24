@@ -6,11 +6,20 @@ import uuid
 from sqlalchemy.orm import Session
 
 from app.models import Candidate, Resume
-from app.services.errors import InvalidStateError, NotFoundError, ValidationError
+from app.services.errors import (
+    UPLOAD_ERROR_TOO_LARGE,
+    UPLOAD_ERROR_UNSUPPORTED_TYPE,
+    InvalidStateError,
+    NotFoundError,
+    UploadValidationError,
+    ValidationError,
+)
 from app.services.storage_service import StorageProvider
 from app.services.text_extraction_service import (
     DOCX_CONTENT_TYPE,
     PDF_CONTENT_TYPE,
+    PDF_MAGIC,
+    ZIP_MAGIC,
     extract_text,
 )
 
@@ -31,10 +40,8 @@ class ResumeService:
     ) -> Resume:
         """Create a new resume for a candidate."""
         candidate = db.get(Candidate, candidate_id)
-        if candidate is None:
+        if candidate is None or candidate.organization_id != organization_id:
             raise NotFoundError("Candidate was not found.")
-        if candidate.organization_id != organization_id:
-            raise ValidationError("Candidate does not belong to the expected organization.")
         resume = Resume(
             candidate_id=candidate_id,
             file_uri=file_uri,
@@ -57,6 +64,7 @@ class ResumeService:
         file_bytes: bytes,
         max_upload_bytes: int,
         storage: StorageProvider,
+        checksum: str | None = None,
     ) -> Resume:
         """Store an uploaded resume file, extract its text, and persist metadata.
 
@@ -73,10 +81,8 @@ class ResumeService:
         )
 
         candidate = db.get(Candidate, candidate_id)
-        if candidate is None:
+        if candidate is None or candidate.organization_id != organization_id:
             raise NotFoundError("Candidate was not found.")
-        if candidate.organization_id != organization_id:
-            raise ValidationError("Candidate does not belong to the expected organization.")
 
         extension = filename.rsplit(".", 1)[-1].lower()
         resume_id = uuid.uuid4()
@@ -92,7 +98,7 @@ class ResumeService:
         # orphaned file remains. The caller rolls back the DB transaction.
         try:
             text = extract_text(file_bytes, filename=filename)
-            checksum = hashlib.sha256(file_bytes).hexdigest()
+            digest = checksum or hashlib.sha256(file_bytes).hexdigest()
             resume = Resume(
                 id=resume_id,
                 candidate_id=candidate_id,
@@ -100,7 +106,7 @@ class ResumeService:
                 original_filename=filename,
                 content_type=content_type,
                 file_size_bytes=len(file_bytes),
-                checksum=checksum,
+                checksum=digest,
                 extracted_text=text,
                 status="text_extracted",
             )
@@ -121,10 +127,8 @@ class ResumeService:
     ) -> list[Resume]:
         """Return a candidate's resumes, enforcing organization scope."""
         candidate = db.get(Candidate, candidate_id)
-        if candidate is None:
+        if candidate is None or candidate.organization_id != organization_id:
             raise NotFoundError("Candidate was not found.")
-        if candidate.organization_id != organization_id:
-            raise ValidationError("Candidate does not belong to the expected organization.")
         return list(candidate.resumes)
 
     def get(
@@ -136,10 +140,8 @@ class ResumeService:
     ) -> Resume:
         """Return one resume by id, enforcing organization scope via candidate."""
         resume = db.get(Resume, resume_id)
-        if resume is None:
+        if resume is None or resume.candidate.organization_id != organization_id:
             raise NotFoundError("Resume was not found.")
-        if resume.candidate.organization_id != organization_id:
-            raise ValidationError("Resume does not belong to the expected organization.")
         return resume
 
     def get_extracted_text(
@@ -168,21 +170,36 @@ class ResumeService:
         max_upload_bytes: int,
     ) -> None:
         if len(file_bytes) > max_upload_bytes:
-            raise ValidationError(
-                f"Uploaded file exceeds the maximum size of {max_upload_bytes} bytes."
+            raise UploadValidationError(
+                f"Uploaded file exceeds the maximum size of {max_upload_bytes} bytes.",
+                code=UPLOAD_ERROR_TOO_LARGE,
             )
 
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         type_map = {"pdf": PDF_CONTENT_TYPE, "docx": DOCX_CONTENT_TYPE}
         expected_type = type_map.get(extension)
         if expected_type is None:
-            raise ValidationError(
+            raise UploadValidationError(
                 "Unsupported file type: "
-                f"{extension or 'unknown'!r}. Only .pdf and .docx are allowed."
+                f"{extension or 'unknown'!r}. Only .pdf and .docx are allowed.",
+                code=UPLOAD_ERROR_UNSUPPORTED_TYPE,
             )
         if content_type is None or content_type.lower() != expected_type:
-            raise ValidationError(
-                f"Content type {content_type!r} does not match the file extension .{extension}."
+            raise UploadValidationError(
+                f"Content type {content_type!r} does not match the file extension .{extension}.",
+                code=UPLOAD_ERROR_UNSUPPORTED_TYPE,
+            )
+
+        # File signature validation
+        if extension == "pdf" and not file_bytes.startswith(PDF_MAGIC):
+            raise UploadValidationError(
+                "File content does not match PDF signature.",
+                code=UPLOAD_ERROR_UNSUPPORTED_TYPE,
+            )
+        if extension == "docx" and not file_bytes.startswith(ZIP_MAGIC):
+            raise UploadValidationError(
+                "File content does not match DOCX/ZIP signature.",
+                code=UPLOAD_ERROR_UNSUPPORTED_TYPE,
             )
 
     @staticmethod

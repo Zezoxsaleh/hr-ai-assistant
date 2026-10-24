@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
+  ArrowRight,
   Sparkles,
   Link2,
   Link as LinkIcon,
@@ -14,6 +15,9 @@ import {
 } from "lucide-react";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import Modal from "../../components/common/Modal";
+import EmptyState from "../../components/common/EmptyState";
+import ErrorState from "../../components/common/ErrorState";
+import Badge from "../../components/common/Badge";
 import { getCandidateById, updateCandidate } from "../../services/candidateService";
 import { findCandidateApplications } from "../../services/interviewQuestionSetService";
 
@@ -37,8 +41,9 @@ export default function CandidateDetails() {
   const [saveOk, setSaveOk] = useState(false);
   const [prepOpen, setPrepOpen] = useState(false);
   const [candidateApps, setCandidateApps] = useState([]);
-  const [appsChecking, setAppsChecking] = useState(false);
-  const [prepError, setPrepError] = useState("");
+  const [appsLoading, setAppsLoading] = useState(true);
+  const [appsError, setAppsError] = useState(false);
+  const [appsAttempt, setAppsAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -57,6 +62,25 @@ export default function CandidateDetails() {
       active = false;
     };
   }, [id]);
+
+  useEffect(() => {
+    let active = true;
+    setAppsLoading(true);
+    setAppsError(false);
+    findCandidateApplications(id)
+      .then((apps) => {
+        if (active) setCandidateApps(apps);
+      })
+      .catch(() => {
+        if (active) setAppsError(true);
+      })
+      .finally(() => {
+        if (active) setAppsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, appsAttempt]);
 
   const openEdit = () => {
     setEmail(c?.email || "");
@@ -87,29 +111,16 @@ export default function CandidateDetails() {
     }
   };
 
-  const openPrep = async () => {
-    setPrepError("");
+  const openPrep = () => {
     setPrepOpen(false);
-    setAppsChecking(true);
-    try {
-      const apps = await findCandidateApplications(c.id);
-      if (apps.length === 1) {
-        navigate(`/interview-questions?applicationId=${apps[0].id}`);
-        return;
-      }
-      if (apps.length === 0) {
-        setPrepError("This candidate has no job applications yet. Create one from the Reviews page first.");
-        return;
-      }
-      setCandidateApps(apps);
-      setPrepOpen(true);
-    } catch (err) {
-      setPrepError(
-        err?.response?.data?.detail || "Could not load this candidate's job applications."
-      );
-    } finally {
-      setAppsChecking(false);
+    if (appsLoading) return;
+    if (appsError) return;
+    if (candidateApps.length === 1) {
+      navigate(`/interview-questions?applicationId=${candidateApps[0].id}`);
+      return;
     }
+    if (candidateApps.length === 0) return;
+    setPrepOpen(true);
   };
 
   if (loading) return <LoadingSpinner label="Loading candidate..." />;
@@ -173,18 +184,10 @@ export default function CandidateDetails() {
           </div>
         </div>
         <div className="detail-hero-actions">
-          <div className="big-score" style={{ textAlign: "right" }}>
-            <strong className="muted-note">Score is per job application</strong>
-            <span>View it in Application Review</span>
+          <div className="candidate-scope-note">
+            <strong>Candidate profile across roles</strong>
+            <span>Scores, evidence, and HR decisions belong to each job application.</span>
           </div>
-          <button
-            className="btn btn-secondary wide"
-            onClick={openPrep}
-            style={{ marginTop: 18 }}
-          >
-            <MessageSquareText size={16} /> {appsChecking ? "Checking applications..." : "Prepare Interview Questions"}
-          </button>
-          {prepError && <div className="form-error">{prepError}</div>}
         </div>
       </div>
 
@@ -199,8 +202,8 @@ export default function CandidateDetails() {
               <Pencil size={15} /> Edit
             </button>
           </div>
-          <Info l="Email" v={c.email} />
-          <Info l="Phone" v={c.phone} />
+          <Info l={c.email ? "Email" : c.profileEmail ? "Email (from CV)" : "Email"} v={c.email || c.profileEmail} />
+          <Info l={c.phone ? "Phone" : c.profilePhone ? "Phone (from CV)" : "Phone"} v={c.phone || c.profilePhone} />
           <Info l="Experience" v={c.experience} />
 
           <h4>Skills</h4>
@@ -217,16 +220,57 @@ export default function CandidateDetails() {
           </div>
         </div>
 
-        {/* ===== AI Evaluation ===== */}
+        {/* ===== Job-scoped applications ===== */}
         <div className="panel">
-          <div className="ai-title">
-            <Sparkles size={18} />
-            <h3>AI Evaluation</h3>
+          <div className="panel-title">
+            <div>
+              <p className="eyebrow">JOB-SCOPED WORK</p>
+              <h3>Applications</h3>
+            </div>
+            <button
+              className="btn btn-secondary btn-small"
+              onClick={openPrep}
+              disabled={appsLoading || appsError || candidateApps.length === 0}
+              title="Prepare questions for one of this candidate's job applications"
+            >
+              <MessageSquareText size={15} /> {appsLoading ? "Loading…" : "Prepare questions"}
+            </button>
           </div>
-          <p className="ai-explanation">
-            AI screening runs against a specific job. Open the application review screen to run (or re-run) the
-            evaluation and see the backend-computed score, the explanation, score breakdown, and requirement evidence.
+          <p className="muted-note" style={{ marginTop: -12, marginBottom: 16 }}>
+            Review each role-specific evaluation, evidence, and HR decision from its application.
           </p>
+          {appsLoading ? (
+            <LoadingSpinner label="Loading candidate applications…" />
+          ) : appsError ? (
+            <ErrorState
+              message="Unable to load this candidate's applications."
+              onRetry={() => setAppsAttempt((attempt) => attempt + 1)}
+            />
+          ) : candidateApps.length === 0 ? (
+            <EmptyState message="No job applications are linked to this candidate yet." />
+          ) : (
+            <div className="application-picker" aria-label="Candidate applications">
+              {candidateApps.map((app) => (
+                <button
+                  type="button"
+                  key={app.id}
+                  className="application-picker-row"
+                  onClick={() => navigate(`/applications/${app.id}/review`)}
+                >
+                  <span>
+                    <strong>{app.jobTitle || "Untitled job"}</strong>
+                    <span className="muted-note" style={{ display: "block", marginTop: 4 }}>
+                      Applied {app.createdAt ? new Date(app.createdAt).toLocaleDateString() : "date unavailable"}
+                    </span>
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                    <Badge status={app.status} />
+                    <ArrowRight size={15} aria-hidden="true" />
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
@@ -250,6 +294,9 @@ export default function CandidateDetails() {
             placeholder="+1 (555) 000-0000"
           />
         </label>
+        <p className="muted-note">
+          These fields update the candidate record. Contact details extracted from the CV remain labeled as CV data.
+        </p>
         {saveError && <div className="form-error">{saveError}</div>}
         {saveOk && <div className="form-success">Contact details saved.</div>}
         <div className="modal-actions">
@@ -269,8 +316,7 @@ export default function CandidateDetails() {
         onClose={() => setPrepOpen(false)}
       >
         <p className="muted-note">
-          {c.name} has multiple job applications. Question preparation is scoped to one
-          application — pick the job you want to prepare questions for.
+          {c.name} has multiple job applications. Pick the role you want to prepare questions for.
         </p>
         <div className="application-picker">
           {candidateApps.map((app) => (

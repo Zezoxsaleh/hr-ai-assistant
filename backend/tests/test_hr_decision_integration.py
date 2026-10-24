@@ -356,6 +356,7 @@ def test_no_autonomous_ai_decision(db_session: Session) -> None:
     organization, _user, application, job_profile, candidate_profile = create_parent_records(
         db_session
     )
+    application.resume.extracted_text = "I use Python daily."
     evidence_provider = FakeAIProvider(
         provider="fake",
         model="fake-evidence-model",
@@ -367,7 +368,7 @@ def test_no_autonomous_ai_decision(db_session: Session) -> None:
                         "requirement_key": requirement_key("Python", "must_have"),
                         "skill": "Python",
                     },
-                    "candidate_evidence": {"source": "resume", "skill": "Python"},
+                    "candidate_evidence": {"quote": "I use Python daily."},
                     "strength": "strong",
                 },
             ]

@@ -20,6 +20,7 @@ export async function getApplications(status) {
     job: row.job_title,
     appliedAt: row.created_at,
     score: row.score,
+    group: row.group,
     status: row.status,
   }));
 }

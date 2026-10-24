@@ -13,10 +13,16 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.ai.contracts.schema import AI_CONTRACT_SCHEMA_VERSION, SchemaVersion
+from app.ai.contracts.schema import JOB_PROFILE_EXTRACTION_SCHEMA_VERSION, SchemaVersion
 
 RequirementCategory = Literal["must_have", "important", "nice_to_have"]
 RequirementDimension = Literal["skill", "experience", "education", "responsibility"]
+JobQualityFindingType = Literal[
+    "unclear_requirement",
+    "potential_conflict",
+    "priority_unclear",
+    "not_measurable",
+]
 
 REQUIREMENT_CATEGORIES: tuple[RequirementCategory, ...] = (
     "must_have",
@@ -80,23 +86,40 @@ class JobRequirement(BaseModel):
         return self
 
 
-class JobProfileExtractionOutput(BaseModel):
-    """A job profile extracted from a raw job description (schema v1.1).
+class JobDescriptionQualityFinding(BaseModel):
+    """A source-grounded issue for HR to review; never a replacement requirement."""
 
-    ``requirements`` accepts the v1.0 flat ``list[str]`` shape for read
-    compatibility or the canonical v1.1 structured ``list[JobRequirement]``
-    shape. The two shapes cannot be mixed in a single list. Flat entries are
-    normalized to structured requirements with ``category="important"`` and
-    ``dimension="skill"`` defaults; canonical entry keys are always
-    system-generated and duplicate keys are rejected.
+    model_config = ConfigDict(extra="forbid")
+
+    finding_type: JobQualityFindingType
+    source_quote: Annotated[str, Field(min_length=1)]
+    concern: Annotated[str, Field(min_length=1)]
+    question_for_hr: Annotated[str, Field(min_length=1)]
+
+
+class JobDescriptionQualityReview(BaseModel):
+    """Optional advisory findings extracted from a job description."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    findings: Annotated[list[JobDescriptionQualityFinding], Field(default_factory=list)]
+
+
+class JobProfileExtractionOutput(BaseModel):
+    """A job profile extracted from a raw job description (schema v1.2).
+
+    ``requirements`` accepts the v1.0 flat ``list[str]`` shape and v1.1
+    structured requirements for read compatibility. The optional v1.2 quality
+    review is advisory and quote-verified before persistence.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: SchemaVersion = AI_CONTRACT_SCHEMA_VERSION
+    schema_version: SchemaVersion = JOB_PROFILE_EXTRACTION_SCHEMA_VERSION
     title: Annotated[str, Field(min_length=1)]
     summary: str | None = None
     requirements: Annotated[list[JobRequirement], Field(default_factory=list)]
+    quality_review: JobDescriptionQualityReview | None = None
 
     @field_validator("requirements", mode="before")
     @classmethod

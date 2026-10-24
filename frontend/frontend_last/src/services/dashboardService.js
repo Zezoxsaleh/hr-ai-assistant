@@ -17,13 +17,13 @@ export async function getDashboardStats() {
   const { apps, jobs } = await loadData();
   const advanced = apps.filter((a) => a.status === "advanced").length;
   return {
-    totalCandidates: new Set(apps.map((a) => a.candidateId)).size,
+    candidatesWithApplications: new Set(apps.map((a) => a.candidateId).filter(Boolean)).size,
     activeJobs: jobs.filter((j) => j.status === "active").length,
     applications: apps.length,
     shortlisted:
       apps.filter((a) => a.status === "advanced" || a.status === "ready_for_review").length,
     // The deepest forward state the backend tracks is `advanced` (no hired).
-    hired: advanced,
+    advancedApplications: advanced,
   };
 }
 

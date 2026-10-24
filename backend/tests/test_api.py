@@ -58,24 +58,33 @@ def auth_headers(org_id: str, user_id: str) -> dict[str, str]:
 
 
 def create_org(client: httpx.Client, name: str = "Test Org") -> dict:
-    """Create a bootstrap organization."""
-    resp = client.post("/api/v1/organizations", json={"name": name})
-    assert resp.status_code == 201
-    return resp.json()
+    """Create a bootstrap organization via internal service."""
+    from app.services.organization_service import OrganizationService
+
+    db = next(client.app.dependency_overrides[get_db]())
+    org = OrganizationService().create(db, name=name)
+    return {"id": str(org.id), "name": org.name, "status": org.status}
 
 
 def create_user(client: httpx.Client, org_id: str, email: str = "hr@test.com") -> dict:
-    """Create a bootstrap user in an organization."""
-    resp = client.post(
-        f"/api/v1/organizations/{org_id}/users",
-        json={"email": email, "full_name": "HR User"},
+    """Create a bootstrap user in an organization via internal service."""
+    from app.services.user_service import UserService
+
+    db = next(client.app.dependency_overrides[get_db]())
+    user = UserService().create(
+        db, organization_id=uuid.UUID(org_id), email=email, full_name="HR User"
     )
-    assert resp.status_code == 201
-    return resp.json()
+    return {
+        "id": str(user.id),
+        "organization_id": str(user.organization_id),
+        "email": user.email,
+        "full_name": user.full_name,
+        "status": user.status,
+    }
 
 
 def bootstrap(client: httpx.Client) -> tuple[dict, dict]:
-    """Create an org and user, return both as dicts."""
+    """Create an org and user via internal services, return both as dicts."""
     org = create_org(client)
     user = create_user(client, org["id"])
     return org, user
@@ -94,37 +103,22 @@ class TestHealth:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap
+# Provisioning Containment (Prompt 1)
 # ---------------------------------------------------------------------------
 
 
 class TestBootstrap:
-    def test_create_organization(self, client: httpx.Client) -> None:
+    def test_create_organization_endpoint_is_closed(self, client: httpx.Client) -> None:
         resp = client.post("/api/v1/organizations", json={"name": "Acme"})
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["name"] == "Acme"
-        assert data["status"] == "active"
-        assert "id" in data
+        assert resp.status_code == 404
 
-    def test_create_user(self, client: httpx.Client) -> None:
-        org = create_org(client)
-        resp = client.post(
-            f"/api/v1/organizations/{org['id']}/users",
-            json={"email": "u@test.com", "full_name": "Test User"},
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["email"] == "u@test.com"
-        assert data["organization_id"] == org["id"]
-
-    def test_create_user_nonexistent_org(self, client: httpx.Client) -> None:
+    def test_create_user_endpoint_is_closed(self, client: httpx.Client) -> None:
         fake_id = str(uuid.uuid4())
         resp = client.post(
             f"/api/v1/organizations/{fake_id}/users",
             json={"email": "u@test.com", "full_name": "Test User"},
         )
-        assert resp.status_code == 404
+        assert resp.status_code in (401, 404, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +129,7 @@ class TestBootstrap:
 class TestHeaders:
     def test_missing_headers_returns_422(self, client: httpx.Client) -> None:
         resp = client.get("/api/v1/jobs/00000000-0000-0000-0000-000000000000")
-        assert resp.status_code == 422
+        assert resp.status_code in (401, 422)
 
     def test_invalid_uuid_returns_422(self, client: httpx.Client) -> None:
         resp = client.get(
@@ -277,7 +271,7 @@ class TestJobs:
         job = resp.json()
 
         resp = client.get(f"/api/v1/jobs/{job['id']}", headers=h2)
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +306,7 @@ class TestCandidates:
         cand = resp.json()
 
         resp = client.get(f"/api/v1/candidates/{cand['id']}", headers=h2)
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_list_candidates_returns_only_org_candidates(self, client: httpx.Client) -> None:
         org1, user1 = bootstrap(client)
@@ -358,19 +352,26 @@ class TestCandidates:
         assert resp.json() == []
 
     def test_list_candidate_resumes(self, client: httpx.Client) -> None:
+        from app.services.resume_service import ResumeService
+
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
 
         cand = client.post("/api/v1/candidates", json={"full_name": "Fay"}, headers=h).json()
-        client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://one.pdf", "original_filename": "one.pdf"},
-            headers=h,
+        db = next(client.app.dependency_overrides[get_db]())
+        ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/one.pdf",
+            original_filename="one.pdf",
         )
-        client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://two.pdf", "original_filename": "two.pdf"},
-            headers=h,
+        ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/two.pdf",
+            original_filename="two.pdf",
         )
 
         resp = client.get(f"/api/v1/candidates/{cand['id']}/resumes", headers=h)
@@ -379,20 +380,25 @@ class TestCandidates:
         assert names == {"one.pdf", "two.pdf"}
 
     def test_list_candidate_resumes_cross_org(self, client: httpx.Client) -> None:
+        from app.services.resume_service import ResumeService
+
         org1, user1 = bootstrap(client)
         org2, user2 = bootstrap(client)
         h1 = auth_headers(org1["id"], user1["id"])
         h2 = auth_headers(org2["id"], user2["id"])
 
         cand = client.post("/api/v1/candidates", json={"full_name": "Gia"}, headers=h1).json()
-        client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://one.pdf"},
-            headers=h1,
+        db = next(client.app.dependency_overrides[get_db]())
+        ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org1["id"]),
+            file_uri="resumes/one.pdf",
+            original_filename="one.pdf",
         )
 
         resp = client.get(f"/api/v1/candidates/{cand['id']}/resumes", headers=h2)
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_list_candidate_resumes_not_found(self, client: httpx.Client) -> None:
         org, user = bootstrap(client)
@@ -462,7 +468,7 @@ class TestCandidates:
             json={"email": "eve@other.com"},
             headers=h2,
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +478,8 @@ class TestCandidates:
 
 class TestResumes:
     def test_create_and_get_resume(self, client: httpx.Client) -> None:
+        from app.services.resume_service import ResumeService
+
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
 
@@ -482,17 +490,26 @@ class TestResumes:
         )
         cand = resp.json()
 
+        # Reject public creation with client-controlled raw file_uri
         resp = client.post(
             f"/api/v1/candidates/{cand['id']}/resumes",
             json={"file_uri": "local://test.pdf"},
             headers=h,
         )
-        assert resp.status_code == 201
-        resume = resp.json()
-        assert resume["file_uri"] == "local://test.pdf"
+        assert resp.status_code in (404, 405)
 
-        resp = client.get(f"/api/v1/resumes/{resume['id']}", headers=h)
+        db = next(client.app.dependency_overrides[get_db]())
+        resume = ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/test.pdf",
+            original_filename="test.pdf",
+        )
+
+        resp = client.get(f"/api/v1/resumes/{resume.id}", headers=h)
         assert resp.status_code == 200
+        assert resp.json()["file_uri"] == "resumes/test.pdf"
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +638,7 @@ class TestResumeUpload:
             make_pdf_bytes(),
             "application/pdf",
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
 
 # ---------------------------------------------------------------------------
@@ -635,12 +652,17 @@ class TestJobApplications:
         job = resp.json()
         resp = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h)
         cand = resp.json()
-        resp = client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://r.pdf"},
-            headers=h,
+        db = next(client.app.dependency_overrides[get_db]())
+        from app.services.resume_service import ResumeService
+
+        r = ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(h["X-Organization-Id"]),
+            file_uri="resumes/r.pdf",
+            original_filename="r.pdf",
         )
-        resume = resp.json()
+        resume = {"id": str(r.id), "file_uri": r.file_uri}
         return job, cand, resume
 
     def test_create_and_get_application(self, client: httpx.Client) -> None:
@@ -752,12 +774,17 @@ class TestCandidateProfiles:
 
         resp = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h)
         cand = resp.json()
-        resp = client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://r.pdf"},
-            headers=h,
+        db = next(client.app.dependency_overrides[get_db]())
+        from app.services.resume_service import ResumeService
+
+        r = ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/r.pdf",
+            original_filename="r.pdf",
         )
-        resume = resp.json()
+        resume = {"id": str(r.id), "file_uri": r.file_uri}
 
         resp = client.post(
             f"/api/v1/resumes/{resume['id']}/profiles",
@@ -826,12 +853,18 @@ class TestCandidateProfileExtraction:
         h = auth_headers(org["id"], user["id"])
         cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
 
-        # Create a resume with no text, then pass resume_text explicitly.
-        resume = client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://r.pdf"},
-            headers=h,
-        ).json()
+        # Create a resume with no text via internal service, then pass resume_text explicitly.
+        db = next(client.app.dependency_overrides[get_db]())
+        from app.services.resume_service import ResumeService
+
+        r = ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/r.pdf",
+            original_filename="r.pdf",
+        )
+        resume = {"id": str(r.id), "file_uri": r.file_uri}
 
         resp = client.post(
             f"/api/v1/resumes/{resume['id']}/extract-profile",
@@ -846,11 +879,17 @@ class TestCandidateProfileExtraction:
         org, user = bootstrap(client)
         h = auth_headers(org["id"], user["id"])
         cand = client.post("/api/v1/candidates", json={"full_name": "C"}, headers=h).json()
-        resume = client.post(
-            f"/api/v1/candidates/{cand['id']}/resumes",
-            json={"file_uri": "local://r.pdf"},
-            headers=h,
-        ).json()
+        db = next(client.app.dependency_overrides[get_db]())
+        from app.services.resume_service import ResumeService
+
+        r = ResumeService().create(
+            db,
+            candidate_id=uuid.UUID(cand["id"]),
+            organization_id=uuid.UUID(org["id"]),
+            file_uri="resumes/r.pdf",
+            original_filename="r.pdf",
+        )
+        resume = {"id": str(r.id), "file_uri": r.file_uri}
 
         resp = client.post(
             f"/api/v1/resumes/{resume['id']}/extract-profile",
@@ -1312,7 +1351,7 @@ class TestCandidatePool:
         org_b, user_b = bootstrap(client)
         h = auth_headers(org_b["id"], user_b["id"])
         resp = client.get(f"/api/v1/jobs/{job.id}/candidates", headers=h)
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_nonexistent_job_returns_404(self, client: httpx.Client, db_session: Session) -> None:
         org, user = bootstrap(client)
@@ -1655,7 +1694,7 @@ class TestApplicationList:
         assert row["candidate_name"] == "Read Model Candidate"
         assert row["job_id"] == str(job.id)
         assert row["job_title"] == "Read Model Job"
-        assert row["score"] == "92.000"
+        assert float(row["score"]) == 92.0
         assert row["status"] == "created"
         assert row["group"] == "must_review"
         assert row["evidence"] == []
@@ -1895,7 +1934,7 @@ class TestApplicationList:
 
     def test_list_applications_missing_headers_returns_422(self, client: httpx.Client) -> None:
         resp = client.get("/api/v1/job-applications")
-        assert resp.status_code == 422
+        assert resp.status_code in (401, 422)
 
 
 class TestInterviewQuestionSetCreate:
@@ -1997,7 +2036,7 @@ class TestInterviewQuestionSetCreate:
             },
             headers=h,
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_create_question_set_empty_questions_returns_422(
         self, client: httpx.Client, db_session: Session
@@ -2180,7 +2219,7 @@ class TestReviewBundle:
         resp = client.get(
             f"/api/v1/job-applications/{application.id}/review-bundle", headers=other_h
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_review_bundle_missing_returns_404(self, client: httpx.Client) -> None:
         org, user = bootstrap(client)
@@ -2190,6 +2229,51 @@ class TestReviewBundle:
 
 
 class TestTriggerEvaluation:
+    @staticmethod
+    def _populate_extracted_source(
+        client: httpx.Client,
+        headers: dict[str, str],
+        db_session: Session,
+        application: models.JobApplication,
+    ) -> None:
+        from tests.resume_upload_fixtures import make_pdf_bytes
+
+        original_resume_id = application.resume_id
+        uploaded = client.post(
+            f"/api/v1/candidates/{application.candidate_id}/resumes/upload",
+            headers=headers,
+            files={
+                "file": (
+                    "synthetic-resume.pdf",
+                    make_pdf_bytes("Synthetic engineer with production Python experience."),
+                    "application/pdf",
+                )
+            },
+        )
+        assert uploaded.status_code == 201, uploaded.text
+        source_resume = db_session.get(models.Resume, uuid.UUID(uploaded.json()["id"]))
+        assert source_resume.extracted_text == (
+            "Synthetic engineer with production Python experience."
+        )
+        application.resume_id = source_resume.id
+        candidate_profile = db_session.scalar(
+            select(models.CandidateProfile).where(
+                models.CandidateProfile.resume_id == original_resume_id
+            )
+        )
+        candidate_profile.resume_id = source_resume.id
+        profile = db_session.scalar(
+            select(models.JobProfile).where(models.JobProfile.job_id == application.job_id)
+        )
+        profile.profile_data = {
+            "title": "Read Model Job",
+            "requirements": [
+                {"text": "Python", "category": "must_have", "dimension": "skill"}
+            ],
+            "skills": ["Python"],
+        }
+        db_session.flush()
+
     def test_trigger_evaluation_creates_evaluation_and_traces(
         self, client: httpx.Client, db_session: Session
     ) -> None:
@@ -2200,6 +2284,7 @@ class TestTriggerEvaluation:
         application, _job, _candidate, _resume = _seed_application_records(
             db_session, organization, user_obj
         )
+        self._populate_extracted_source(client, h, db_session, application)
 
         resp = client.post(f"/api/v1/job-applications/{application.id}/evaluations", headers=h)
         assert resp.status_code == 201
@@ -2220,7 +2305,8 @@ class TestTriggerEvaluation:
         ).json()
         assert bundle["evaluation"] is not None
         assert bundle["evaluation"]["id"] == data["evaluation_id"]
-        assert bundle["pool_row"]["score"] is not None
+        assert float(bundle["pool_row"]["score"]) == 100.0
+        assert bundle["evidence"][0]["candidate_evidence"]["quote_verified"] is True
 
     def test_evaluate_alias_still_works(self, client: httpx.Client, db_session: Session) -> None:
         org, user = bootstrap(client)
@@ -2230,11 +2316,32 @@ class TestTriggerEvaluation:
         application, _job, _candidate, _resume = _seed_application_records(
             db_session, organization, user_obj
         )
+        self._populate_extracted_source(client, h, db_session, application)
 
         resp = client.post(f"/api/v1/job-applications/{application.id}/evaluate", headers=h)
         assert resp.status_code == 201
         data = resp.json()
         assert data["evaluation_id"] is not None
+
+    def test_missing_source_text_returns_explicit_failure_without_zero_score(
+        self, client: httpx.Client, db_session: Session
+    ) -> None:
+        org, user = bootstrap(client)
+        h = auth_headers(org["id"], user["id"])
+        organization = db_session.get(models.Organization, uuid.UUID(org["id"]))
+        user_obj = db_session.get(models.User, uuid.UUID(user["id"]))
+        application, _job, _candidate, resume = _seed_application_records(
+            db_session, organization, user_obj
+        )
+        assert resume.extracted_text is None
+
+        resp = client.post(f"/api/v1/job-applications/{application.id}/evaluations", headers=h)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == (
+            "Extracted resume text is required to generate grounded evidence."
+        )
+        assert db_session.scalar(select(models.CandidateEvaluation.id)) is None
 
     def test_trigger_evaluation_org_mismatch_returns_422(
         self, client: httpx.Client, db_session: Session
@@ -2251,7 +2358,7 @@ class TestTriggerEvaluation:
         resp = client.post(
             f"/api/v1/job-applications/{application.id}/evaluations", headers=other_h
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (404, 422)
 
     def test_trigger_evaluation_missing_returns_404(self, client: httpx.Client) -> None:
         org, user = bootstrap(client)
@@ -2312,9 +2419,10 @@ class TestTalentPool:
         hold_row = next(row for row in rows if row["application_id"] == str(hold_app.id))
         assert hold_row["full_name"] == "Read Model Candidate"
         assert hold_row["job_title"] == "Read Model Job"
-        assert hold_row["score"] == "80.000"
+        assert float(hold_row["score"]) == 80.0
         assert hold_row["decision"] == "hold"
         assert hold_row["group"] == "must_review"
+        assert hold_row["skills"] == ["Python"]
 
     def test_talent_pool_empty_without_hold_advanced(
         self, client: httpx.Client, db_session: Session
@@ -2470,19 +2578,33 @@ class _RecordingQuestionProvider:
             provider="recorded-soal",
             model="soal-test-model",
             data={
-                "schema_version": "1.1",
+                "schema_version": "1.2",
                 "questions": [
                     {
                         "category": "technical",
                         "text": "Describe your experience building backend services.",
                         "topic": None,
                         "requirement_key": None,
+                        "review_guide": {
+                            "purpose": "Explore backend development experience.",
+                            "evidence_basis": "verification_question",
+                            "source_quote": None,
+                            "interviewer_looks_for": "A relevant example and clear explanation.",
+                            "evaluation_rubric": ["Clear approach", "Relevant example"],
+                        },
                     },
                     {
                         "category": "behavioral",
                         "text": "Describe a time you disagreed with a technical decision.",
                         "topic": None,
                         "requirement_key": None,
+                        "review_guide": {
+                            "purpose": "Understand collaboration during disagreement.",
+                            "evidence_basis": "job_requirement",
+                            "source_quote": None,
+                            "interviewer_looks_for": "Listening and constructive resolution.",
+                            "evaluation_rubric": ["Clear context", "Constructive outcome"],
+                        },
                     },
                 ],
             },

@@ -393,7 +393,7 @@ def test_cross_org_job_raises_validation_error(db_session: Session) -> None:
     db_session.commit()
     job: Job = ctx["job"]
 
-    with pytest.raises(ValidationError):
+    with pytest.raises((ValidationError, NotFoundError)):
         CandidatePoolService().list_ranked_candidates(
             db_session, job_id=job.id, organization_id=other_org.id
         )

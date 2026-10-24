@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session
 
 from app.ai.contracts import (
-    AI_CONTRACT_SCHEMA_VERSION,
+    JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
     JobProfileExtractionOutput,
     validate_job_profile_extraction,
 )
@@ -30,14 +30,14 @@ from app.ai.markers import wrap_untrusted
 from app.ai.providers.base import AIProvider, StructuredGenerationRequest
 from app.ai.providers.errors import ProviderError
 from app.models import Job
-from app.services.errors import ValidationError
+from app.services.errors import NotFoundError, ValidationError
 from app.services.job_profile_service import JobProfileService
 from app.services.workflow_trace_service import WorkflowTraceService
 
 WORKFLOW_TYPE = "job_profile_extraction"
 STEP_NAME = "extract_job_profile"
 AI_COMPONENT_NAME = "job_profile_extractor"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 
 def _sha256(value: str) -> str:
@@ -45,9 +45,27 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _serialize_output(extracted: JobProfileExtractionOutput) -> str:
-    """Serialize validated output deterministically for hashing."""
-    return json.dumps(extracted.model_dump(), sort_keys=True, default=str)
+def _serialize_output(profile_data: dict) -> str:
+    """Serialize the verified persisted output deterministically for hashing."""
+    return json.dumps(profile_data, sort_keys=True, default=str)
+
+
+def _verified_quality_review(
+    extracted: JobProfileExtractionOutput,
+    raw_description: str,
+) -> dict[str, object]:
+    """Persist only quality findings that quote the source description exactly."""
+    review = extracted.quality_review
+    if review is None:
+        return {"status": "unavailable", "findings": []}
+
+    findings = [
+        finding.model_dump()
+        for finding in review.findings
+        if finding.source_quote in raw_description
+    ]
+    status = "verified" if len(findings) == len(review.findings) else "partially_verified"
+    return {"status": status, "findings": findings}
 
 
 @dataclass(frozen=True)
@@ -109,9 +127,28 @@ class JobProfileExtractionWorkflow:
         try:
             result = self._provider.generate_structured(
                 StructuredGenerationRequest(
-                    input=wrap_untrusted(raw_description, "JOB_DESCRIPTION"),
+                    input=json.dumps(
+                        {
+                            "trusted_task_instructions": (
+                                "Extract the job profile from the source description. Also review "
+                                "the description for unclear requirements, possible conflicts, "
+                                "unclear priority between essential and optional criteria, and "
+                                "requirements that are not measurable. Do not add, rewrite, or "
+                                "infer requirements. Each quality finding must include an exact "
+                                "verbatim source_quote, a concise concern, and a question for HR "
+                                "to review. An empty findings list is valid when no clear issue "
+                                "is present. These suggestions are advisory and never alter the "
+                                "extracted requirements or approve the profile."
+                            ),
+                            "job_description_source": wrap_untrusted(
+                                raw_description, "JOB_DESCRIPTION"
+                            ),
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
                     output_schema=JobProfileExtractionOutput,
-                    schema_version=AI_CONTRACT_SCHEMA_VERSION,
+                    schema_version=JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
                     metadata={"workflow": WORKFLOW_TYPE},
                 )
             )
@@ -137,7 +174,7 @@ class JobProfileExtractionWorkflow:
                 provider=result.provider,
                 model_name=result.model,
                 prompt_version=PROMPT_VERSION,
-                input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
+                input_schema_version=JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
                 output_schema_version=result.schema_version,
                 latency_ms=result.latency_ms,
                 input_reference=input_reference,
@@ -152,7 +189,9 @@ class JobProfileExtractionWorkflow:
             self._trace_service.mark_run_failed(db, workflow_run_id=run.id)
             raise
 
-        output_reference = {"output_sha256": _sha256(_serialize_output(extracted))}
+        profile_data = extracted.model_dump(exclude={"quality_review"})
+        profile_data["quality_review"] = _verified_quality_review(extracted, raw_description)
+        output_reference = {"output_sha256": _sha256(_serialize_output(profile_data))}
         ai_trace = self._trace_service.record_ai_trace(
             db,
             workflow_step_trace_id=step.id,
@@ -161,7 +200,7 @@ class JobProfileExtractionWorkflow:
             provider=result.provider,
             model_name=result.model,
             prompt_version=PROMPT_VERSION,
-            input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
+            input_schema_version=JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
             output_schema_version=result.schema_version,
             latency_ms=result.latency_ms,
             input_reference=input_reference,
@@ -175,7 +214,7 @@ class JobProfileExtractionWorkflow:
             job_id=job.id,
             status="draft",
             source="ai_extracted",
-            profile_data=extracted.model_dump(),
+            profile_data=profile_data,
             raw_input_snapshot=input_reference,
             provenance={
                 "workflow": WORKFLOW_TYPE,
@@ -227,7 +266,7 @@ class JobProfileExtractionWorkflow:
             ai_component_name=AI_COMPONENT_NAME,
             status="failed",
             prompt_version=PROMPT_VERSION,
-            input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
-            output_schema_version=AI_CONTRACT_SCHEMA_VERSION,
+            input_schema_version=JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
+            output_schema_version=JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
             input_reference=input_reference,
         )

@@ -59,10 +59,11 @@ def test_upload_pdf_stores_file_and_text(db_session: Session, tmp_path: Path) ->
     assert resume.content_type == "application/pdf"
     assert resume.checksum is not None
 
-    # File exists on disk, not in the DB text column only.
-    path = Path(resume.file_uri)
+    # File exists under storage root, and file_uri is an opaque relative key
+    assert not Path(resume.file_uri).is_absolute()
+    path = storage._root_dir / resume.file_uri
     assert path.exists()
-    assert path.read_bytes() == make_pdf_bytes()
+    assert storage.read(file_uri=resume.file_uri) == make_pdf_bytes()
 
 
 def test_upload_docx_stores_file_and_text(db_session: Session, tmp_path: Path) -> None:
@@ -84,7 +85,8 @@ def test_upload_docx_stores_file_and_text(db_session: Session, tmp_path: Path) -
 
     assert resume.status == "text_extracted"
     assert DOCX_TEXT in resume.extracted_text
-    assert Path(resume.file_uri).exists()
+    assert not Path(resume.file_uri).is_absolute()
+    assert (storage._root_dir / resume.file_uri).exists()
 
 
 def test_upload_oversize_raises_and_no_file_written(db_session: Session, tmp_path: Path) -> None:
@@ -180,7 +182,7 @@ def test_upload_cross_org_isolated(db_session: Session, tmp_path: Path) -> None:
     storage1 = LocalFileSystemStorage(tmp_path)
     service = ResumeService()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(NotFoundError):
         service.create_from_upload(
             db_session,
             candidate_id=candidate2.id,
@@ -265,7 +267,7 @@ def test_get_extracted_text_cross_org(db_session: Session, tmp_path: Path) -> No
     )
     db_session.commit()
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(NotFoundError):
         service.get_extracted_text(db_session, resume_id=resume.id, organization_id=org2.id)
 
 

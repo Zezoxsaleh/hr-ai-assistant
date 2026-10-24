@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { CalendarClock, Clock3, CheckCircle2, AlertCircle } from "lucide-react";
+import { CalendarClock, Clock3, CheckCircle2, AlertCircle, ArrowLeft } from "lucide-react";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import ErrorState from "../../components/common/ErrorState";
 import {
@@ -234,13 +234,13 @@ export default function ScheduleInterview() {
 
   if (success) {
     return (
-      <section>
-        <div className="panel success-card">
+      <section className="schedule-page">
+        <div className="panel success-card schedule-success-card">
           <div className="success-icon">
             <CheckCircle2 size={30} />
           </div>
           <h2>Interview Scheduled</h2>
-          <div className="appointment-card">
+          <div className="appointment-card schedule-success-details">
             <div>
               <span>Date</span>
               <strong>{formatDateLabel(selectedDate)}</strong>
@@ -273,187 +273,200 @@ export default function ScheduleInterview() {
   }
 
   return (
-    <section>
-      <div className="panel">
-        <div className="panel-title">
-          <div>
-            <p className="eyebrow">INTERVIEW SCHEDULING</p>
-            <h3>Schedule an interview</h3>
-          </div>
+    <section className="schedule-page">
+      <header className="schedule-page-heading">
+        <div>
+          <p className="eyebrow">INTERVIEW SCHEDULING</p>
+          <h2>Plan an interview</h2>
+          <p>Choose the people and a time. HERA will check the selected interviewer’s calendar for conflicts.</p>
         </div>
-
-        <div className="schedule-section">
-          <div className="section-title">
-            <span className="step">1</span>
-            <div>
-              <h4>Who's interviewing?</h4>
-              <p>Pick the candidate, job, interviewer, and optional question set.</p>
-            </div>
-          </div>
-
-          <label>
-            Candidate
-            <select value={candidateId} onChange={onCandidateChange}>
-              <option value="">Select a candidate...</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {c.title}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Job
-            <select value={jobId} onChange={(e) => setJobId(e.target.value)}>
-              <option value="">Select a job...</option>
-              {jobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  {j.title}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Interviewer
-            <select value={interviewer} onChange={(e) => setInterviewer(e.target.value)}>
-              <option value="">Select an interviewer...</option>
-              {interviewers.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Duration
-            <select value={duration} onChange={(e) => setDuration(e.target.value)}>
-              {DURATION_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {applicationId && (
-            <label>
-              Question Set
-              <select value={questionSetId} onChange={(e) => setQuestionSetId(e.target.value)}>
-                {approvedSets.length === 0 && <option value="">No approved question set</option>}
-                {approvedSets.map((set) => (
-                  <option key={set.id} value={set.id}>
-                    v{set.versionNumber} · {set.questions.length} questions
-                  </option>
-                ))}
-              </select>
-              {approvedSets.length > 0 ? (
-                <span className="muted-note" style={{ fontSize: 12 }}>
-                  Only approved sets can be attached to the interview.
-                </span>
-              ) : (
-                <span className="muted-note" style={{ fontSize: 12 }}>
-                  No approved question set for this application. Generate and approve one first.
-                </span>
-              )}
-            </label>
-          )}
-        </div>
-
-        <div className="schedule-section">
-          <div className="section-title">
-            <span className="step">2</span>
-            <div>
-              <h4>Select a date</h4>
-              <p>Choose a convenient day for the interview.</p>
-            </div>
-          </div>
-          <div className="date-grid">
-            {INTERVIEW_DAYS.map((item) => (
-              <button
-                key={item.date}
-                className={`date-option ${selectedDate === item.date ? "selected" : ""}`}
-                onClick={() => {
-                  setSelectedDate(item.date);
-                  setError("");
-                }}
-                type="button"
-              >
-                <span>{item.month}</span>
-                <strong>{item.label}</strong>
-                <small>{item.day}</small>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="schedule-section">
-          <div className="section-title">
-            <span className="step">3</span>
-            <div>
-              <h4>Select a time</h4>
-              <p>All times are shown in your local timezone. Conflicting slots are disabled.</p>
-            </div>
-          </div>
-          <div className="time-grid">
-            {TIME_SLOTS.map((time) => {
-              const blocked = isBlocked(time);
-              return (
-                <button
-                  key={time}
-                  className={`time-option ${selectedTime === time ? "selected" : ""}`}
-                  onClick={() => {
-                    if (blocked) return;
-                    setSelectedTime(time);
-                    setError("");
-                  }}
-                  disabled={blocked}
-                  title={blocked ? "Conflicts with an existing interview" : undefined}
-                  type="button"
-                >
-                  <Clock3 size={14} /> {time}
-                </button>
-              );
-            })}
-          </div>
-          {slotsLoading && <p className="muted-note" style={{ marginTop: 8, fontSize: 12 }}>Checking availability…</p>}
-          {slotsError && (
-            <p className="muted-note" style={{ marginTop: 8, fontSize: 12, color: "var(--color-danger, #d92d20)" }}>
-              <AlertCircle size={13} style={{ marginRight: 4, verticalAlign: "-2px" }} />
-              {slotsError}
-            </p>
-          )}
-          {!slotsLoading && !slotsError && occupied.length > 0 && (
-            <p className="muted-note" style={{ marginTop: 8, fontSize: 12 }}>
-              {occupied.length} occupied window{occupied.length > 1 ? "s" : ""} on this day for this interviewer —
-              conflicting times are disabled.
-            </p>
-          )}
-        </div>
-
-        {selectedDate && selectedTime && (
-          <div className="selected-appointment">
-            <CalendarClock size={20} />
-            <div>
-              <span>Selected appointment</span>
-              <strong>
-                {formatDateLabel(selectedDate)} · {selectedTime} · {duration} min
-              </strong>
-            </div>
-          </div>
-        )}
-
-        {error && <div className="form-error">{error}</div>}
-
-        <button
-          className="primary wide"
-          onClick={handleConfirm}
-          disabled={submitting || selectedSlotBlocked}
-        >
-          {submitting ? "Scheduling..." : "Schedule Interview"}
+        <button className="btn btn-secondary schedule-back-button" type="button" onClick={() => navigate("/interviews")}>
+          <ArrowLeft size={16} /> Back to interviews
         </button>
+      </header>
+
+      <div className="schedule-layout">
+        <div className="schedule-main">
+          <section className="panel schedule-card" aria-labelledby="schedule-details-title">
+            <div className="schedule-card-heading">
+              <span className="schedule-step">1</span>
+              <div>
+                <h3 id="schedule-details-title">Interview details</h3>
+                <p>Select the candidate, role, interviewer, and meeting length.</p>
+              </div>
+            </div>
+
+            <div className="schedule-fields-grid">
+              <label>
+                Candidate
+                <select value={candidateId} onChange={onCandidateChange}>
+                  <option value="">Select a candidate...</option>
+                  {candidates.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}{candidate.title ? ` — ${candidate.title}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {candidates.length === 0 && (
+                  <span className="schedule-field-help">No candidates are available. Add one through Screening first.</span>
+                )}
+              </label>
+
+              <label>
+                Job
+                <select value={jobId} onChange={(event) => setJobId(event.target.value)}>
+                  <option value="">Select a job...</option>
+                  {jobs.map((job) => (
+                    <option key={job.id} value={job.id}>{job.title}</option>
+                  ))}
+                </select>
+                {jobs.length === 0 && <span className="schedule-field-help">Create a job before scheduling its interview.</span>}
+              </label>
+
+              <label>
+                Interviewer
+                <select value={interviewer} onChange={(event) => setInterviewer(event.target.value)}>
+                  <option value="">Select an interviewer...</option>
+                  {interviewers.map((person) => (
+                    <option key={person.id} value={person.id}>{person.name}</option>
+                  ))}
+                </select>
+                {interviewers.length === 0 && (
+                  <span className="schedule-field-help">No interviewers are available for this workspace.</span>
+                )}
+              </label>
+
+              <label>
+                Duration
+                <select value={duration} onChange={(event) => setDuration(event.target.value)}>
+                  {DURATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              {applicationId && (
+                <label className="schedule-question-field">
+                  Approved question set <span className="schedule-optional">Optional</span>
+                  <select value={questionSetId} onChange={(event) => setQuestionSetId(event.target.value)}>
+                    {approvedSets.length === 0 && <option value="">No approved question set</option>}
+                    {approvedSets.map((set) => (
+                      <option key={set.id} value={set.id}>
+                        v{set.versionNumber} · {set.questions.length} questions
+                      </option>
+                    ))}
+                  </select>
+                  <span className="schedule-field-help">
+                    {approvedSets.length > 0
+                      ? "Only approved question sets can be attached."
+                      : "Generate and approve a question set first, or schedule without one."}
+                  </span>
+                </label>
+              )}
+            </div>
+          </section>
+
+          <section className="panel schedule-card" aria-labelledby="schedule-time-title">
+            <div className="schedule-card-heading">
+              <span className="schedule-step">2</span>
+              <div>
+                <h3 id="schedule-time-title">Choose a date and time</h3>
+                <p>Showing the next four weekdays. Times use your local timezone.</p>
+              </div>
+            </div>
+
+            <div className="schedule-subsection">
+              <h4>Date</h4>
+              <div className="date-grid schedule-date-grid" role="group" aria-label="Interview date">
+                {INTERVIEW_DAYS.map((item) => (
+                  <button
+                    key={item.date}
+                    className={`date-option ${selectedDate === item.date ? "selected" : ""}`}
+                    onClick={() => {
+                      setSelectedDate(item.date);
+                      setError("");
+                    }}
+                    aria-pressed={selectedDate === item.date}
+                    type="button"
+                  >
+                    <span>{item.month}</span>
+                    <strong>{item.label}</strong>
+                    <small>{item.day}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="schedule-subsection">
+              <div className="schedule-subsection-heading">
+                <h4>Time</h4>
+                <span>Availability is checked after choosing an interviewer and date.</span>
+              </div>
+              <div className="time-grid schedule-time-grid" role="group" aria-label="Interview time">
+                {TIME_SLOTS.map((time) => {
+                  const blocked = isBlocked(time);
+                  return (
+                    <button
+                      key={time}
+                      className={`time-option ${selectedTime === time ? "selected" : ""}`}
+                      onClick={() => {
+                        if (blocked) return;
+                        setSelectedTime(time);
+                        setError("");
+                      }}
+                      disabled={blocked}
+                      aria-pressed={selectedTime === time}
+                      title={blocked ? "Conflicts with an existing interview" : undefined}
+                      type="button"
+                    >
+                      <Clock3 size={14} /> {time}
+                    </button>
+                  );
+                })}
+              </div>
+              {slotsLoading && <p className="schedule-inline-status" role="status">Checking interviewer availability…</p>}
+              {slotsError && (
+                <p className="schedule-inline-status schedule-inline-error" role="alert">
+                  <AlertCircle size={14} /> {slotsError}
+                </p>
+              )}
+              {!slotsLoading && !slotsError && occupied.length > 0 && (
+                <p className="schedule-inline-status" role="status">
+                  {occupied.length} occupied window{occupied.length > 1 ? "s" : ""} for this interviewer on this date. Conflicting times are disabled.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <aside className="panel schedule-summary" aria-labelledby="schedule-summary-title">
+          <div className="schedule-summary-icon"><CalendarClock size={20} /></div>
+          <h3 id="schedule-summary-title">Appointment summary</h3>
+          <p className="schedule-summary-intro">
+            {selectedDate && selectedTime
+              ? "Review the details before confirming."
+              : "Your selections will appear here as you build the appointment."}
+          </p>
+          <dl className="schedule-summary-list">
+            <div><dt>Candidate</dt><dd>{selectedCandidate?.name || "Not selected"}</dd></div>
+            <div><dt>Position</dt><dd>{selectedJob?.title || "Not selected"}</dd></div>
+            <div><dt>Interviewer</dt><dd>{selectedInterviewer?.name || "Not selected"}</dd></div>
+            <div><dt>Date</dt><dd>{selectedDate ? formatDateLabel(selectedDate) : "Not selected"}</dd></div>
+            <div><dt>Time</dt><dd>{selectedTime ? `${selectedTime} · ${duration} min` : "Not selected"}</dd></div>
+            {applicationId && <div><dt>Question set</dt><dd>{selectedQuestionSet ? `v${selectedQuestionSet.versionNumber}` : "Not attached"}</dd></div>}
+          </dl>
+
+          {selectedSlotBlocked && <p className="schedule-inline-error" role="alert">This time conflicts with another interview. Choose a different slot.</p>}
+          {error && <div className="form-error schedule-form-error" role="alert">{error}</div>}
+          <button
+            className="primary wide schedule-submit"
+            onClick={handleConfirm}
+            disabled={submitting || selectedSlotBlocked}
+          >
+            {submitting ? "Scheduling…" : "Confirm & schedule"}
+          </button>
+          <p className="schedule-human-note">You’ll review the appointment details here before it is saved.</p>
+        </aside>
       </div>
     </section>
   );

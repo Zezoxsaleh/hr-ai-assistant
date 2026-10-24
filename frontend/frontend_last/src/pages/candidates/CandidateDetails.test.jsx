@@ -55,6 +55,7 @@ function renderPage() {
     <MemoryRouter initialEntries={["/candidates/c-1"]}>
       <Routes>
         <Route path="/candidates/:id" element={<CandidateDetails />} />
+        <Route path="*" element={null} />
       </Routes>
       <LocationProbe />
     </MemoryRouter>
@@ -75,7 +76,8 @@ describe("CandidateDetails application-aware question prep entry", () => {
     renderPage();
 
     await screen.findByText("Ada Lovelace");
-    await user.click(screen.getByRole("button", { name: /Prepare Interview Questions/ }));
+    await screen.findByRole("button", { name: /Backend Engineer/ });
+    await user.click(screen.getByRole("button", { name: /Prepare questions/ }));
 
     await screen.findByText(/interview-questions\?applicationId=app-1/);
     expect(screen.getByTestId("path").textContent).toBe("/interview-questions?applicationId=app-1");
@@ -91,27 +93,50 @@ describe("CandidateDetails application-aware question prep entry", () => {
     renderPage();
 
     await screen.findByText("Ada Lovelace");
-    await user.click(screen.getByRole("button", { name: /Prepare Interview Questions/ }));
+    await screen.findByRole("button", { name: /Backend Engineer/ });
+    await user.click(screen.getByRole("button", { name: /Prepare questions/ }));
 
     expect(
-      await screen.findByText(/Question preparation is scoped to one application/i)
+      await screen.findByText(/Pick the role you want to prepare questions for/i)
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Data Engineer/ }));
+    await user.click(screen.getAllByRole("button", { name: /Data Engineer/ }).at(-1));
 
     expect(screen.getByTestId("path").textContent).toBe("/interview-questions?applicationId=app-2");
   });
 
-  it("shows an inline hint when the candidate has no applications", async () => {
+  it("explains when the candidate has no applications", async () => {
     findCandidateApplications.mockResolvedValue([]);
+    renderPage();
+
+    await screen.findByText("Ada Lovelace");
+    expect(await screen.findByText(/No job applications are linked to this candidate yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Prepare questions/ })).toBeDisabled();
+    expect(screen.getByTestId("path").textContent).toBe("/candidates/c-1?");
+  });
+
+  it("opens the matching application review from the candidate profile", async () => {
+    findCandidateApplications.mockResolvedValue([
+      { id: "app-1", jobTitle: "Backend Engineer", status: "advanced", createdAt: "2026-10-01T10:00:00Z" },
+    ]);
     const user = userEvent.setup();
     renderPage();
 
     await screen.findByText("Ada Lovelace");
-    await user.click(screen.getByRole("button", { name: /Prepare Interview Questions/ }));
+    await user.click(await screen.findByRole("button", { name: /Backend Engineer/ }));
 
-    expect(
-      await screen.findByText(/has no job applications yet/i)
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("path").textContent).toBe("/candidates/c-1?");
+    expect(screen.getByTestId("path").textContent).toBe("/applications/app-1/review?");
+  });
+
+  it("labels profile contact values that came from the CV", async () => {
+    getCandidateById.mockResolvedValue({
+      ...CANDIDATE,
+      email: "",
+      profileEmail: "ada.cv@example.com",
+    });
+    findCandidateApplications.mockResolvedValue([]);
+    renderPage();
+
+    expect(await screen.findByText("Email (from CV)")).toBeInTheDocument();
+    expect(screen.getByText("ada.cv@example.com")).toBeInTheDocument();
   });
 });

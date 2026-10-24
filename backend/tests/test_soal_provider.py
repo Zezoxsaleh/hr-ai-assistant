@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from app.ai.contracts import CandidateProfileExtractionOutput, JobProfileExtractionOutput
 from app.ai.providers import (
     FakeAIProvider,
+    OllamaCloudProvider,
+    ProviderConfigurationError,
     ProviderInvalidRequestError,
     ProviderRateLimitError,
     ProviderTimeoutError,
@@ -369,6 +371,27 @@ def test_factory_returns_soal_with_key() -> None:
     assert isinstance(provider, SoalProvider)
     assert provider.model_name == "gemini-3.5-flash"
     assert provider.base_url == "https://soal.help/api/v1"
+
+
+def test_factory_returns_ollama_cloud_with_key() -> None:
+    settings = Settings(ai_provider="ollama", ollama_api_key="secret")
+    with mock.patch(
+        "app.ai.providers.soal.OpenAI",
+        return_value=_FakeOpenAI(_FakeCompletions()),
+    ):
+        provider = get_provider(settings)
+
+    assert isinstance(provider, OllamaCloudProvider)
+    assert provider.provider_name == "ollama"
+    assert provider.model_name == "gemma4:31b"
+    assert provider.base_url == "https://ollama.com/v1"
+
+
+def test_factory_requires_ollama_key_instead_of_using_fake() -> None:
+    settings = Settings(ai_provider="ollama", ollama_api_key=None)
+
+    with pytest.raises(ProviderConfigurationError, match="OLLAMA_API_KEY"):
+        get_provider(settings)
 
 
 def test_factory_returns_fake_in_fake_mode() -> None:

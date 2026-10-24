@@ -40,8 +40,12 @@ export async function runEvaluation(applicationId) {
 // Records an HR decision through the backend DecisionService API. Only the
 // decision vocabulary from src/types/api/decision.js is valid, and only
 // { decision, reason } is transmitted.
-export async function recordDecision(applicationId, decision, reason) {
-  const payload = { decision, reason: (reason || "").trim() || undefined };
+export async function recordDecision(applicationId, decision, reason, expectedEvaluationId) {
+  const payload = {
+    decision,
+    reason: (reason || "").trim() || undefined,
+    expected_evaluation_id: expectedEvaluationId || undefined,
+  };
   return createDecision(applicationId, payload);
 }
 

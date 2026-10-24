@@ -39,7 +39,7 @@ from app.ai.providers.base import AIProvider, StructuredGenerationRequest
 from app.ai.providers.errors import ProviderError
 from app.models import Resume
 from app.services.candidate_profile_service import CandidateProfileService
-from app.services.errors import ValidationError
+from app.services.errors import NotFoundError, ValidationError
 from app.services.workflow_trace_service import WorkflowTraceService
 
 WORKFLOW_TYPE = "candidate_profile_extraction"
@@ -56,6 +56,15 @@ def _sha256(value: str) -> str:
 def _serialize_output(extracted: CandidateProfileExtractionOutput) -> str:
     """Serialize validated output deterministically for hashing."""
     return json.dumps(extracted.model_dump(), sort_keys=True, default=str)
+
+
+@dataclass(frozen=True)
+class CandidateProfileExtractionPayload:
+    """In-memory generated candidate profile data before database persistence."""
+
+    extracted: CandidateProfileExtractionOutput
+    provider_result: Any
+    input_reference: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -83,17 +92,49 @@ class CandidateProfileExtractionWorkflow:
         self._trace_service = trace_service or WorkflowTraceService()
         self._profile_service = profile_service or CandidateProfileService()
 
-    def run(
+    def generate(
+        self,
+        *,
+        resume_text: str,
+        resume_id: uuid.UUID | None = None,
+    ) -> CandidateProfileExtractionPayload:
+        """Extract structured profile data via AI provider without holding database transactions."""
+        self._require_resume_text(resume_text)
+        input_reference = {
+            "entity": "resume",
+            "entity_id": str(resume_id or ""),
+            "resume_text_sha256": _sha256(resume_text),
+        }
+
+        result = self._provider.generate_structured(
+            StructuredGenerationRequest(
+                input=wrap_untrusted(resume_text, "CV"),
+                output_schema=CandidateProfileExtractionOutput,
+                schema_version=AI_CONTRACT_SCHEMA_VERSION,
+                metadata={"workflow": WORKFLOW_TYPE},
+            )
+        )
+        extracted = validate_candidate_profile_extraction(result.data)
+        return CandidateProfileExtractionPayload(
+            extracted=extracted,
+            provider_result=result,
+            input_reference=input_reference,
+        )
+
+    def persist(
         self,
         db: Session,
         *,
         resume_id: uuid.UUID,
         organization_id: uuid.UUID,
-        resume_text: str,
+        payload: CandidateProfileExtractionPayload,
     ) -> CandidateProfileExtractionResult:
-        """Execute the extraction run, raising on any failure."""
+        """Persist generated candidate profile and workflow traces in a short transaction."""
         resume = self._get_resume(db, resume_id=resume_id, organization_id=organization_id)
-        self._require_resume_text(resume_text)
+        input_reference = payload.input_reference or {
+            "entity": "resume",
+            "entity_id": str(resume.id),
+        }
 
         run = self._trace_service.start_run(
             db,
@@ -109,73 +150,22 @@ class CandidateProfileExtractionWorkflow:
             step_name=STEP_NAME,
             status="running",
         )
-        input_reference = {
-            "entity": "resume",
-            "entity_id": str(resume.id),
-            "resume_text_sha256": _sha256(resume_text),
-        }
 
-        try:
-            result = self._provider.generate_structured(
-                StructuredGenerationRequest(
-                    input=wrap_untrusted(resume_text, "CV"),
-                    output_schema=CandidateProfileExtractionOutput,
-                    schema_version=AI_CONTRACT_SCHEMA_VERSION,
-                    metadata={"workflow": WORKFLOW_TYPE},
-                )
-            )
-        except ProviderError as error:
-            self._record_failure_trace(db, step.id, input_reference)
-            self._trace_service.mark_step_failed(
-                db,
-                workflow_step_trace_id=step.id,
-                error_type=type(error).__name__,
-                error_message=str(error),
-            )
-            self._trace_service.mark_run_failed(db, workflow_run_id=run.id)
-            raise
-
-        try:
-            extracted = validate_candidate_profile_extraction(result.data)
-        except ValidationError as error:
-            self._trace_service.record_ai_trace(
-                db,
-                workflow_step_trace_id=step.id,
-                ai_component_name=AI_COMPONENT_NAME,
-                status="validation_failed",
-                provider=result.provider,
-                model_name=result.model,
-                prompt_version=PROMPT_VERSION,
-                input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
-                output_schema_version=result.schema_version,
-                latency_ms=result.latency_ms,
-                input_reference=input_reference,
-                validation_error={"schema": result.schema_version, "message": str(error)},
-            )
-            self._trace_service.mark_step_failed(
-                db,
-                workflow_step_trace_id=step.id,
-                error_type="ValidationError",
-                error_message=str(error),
-            )
-            self._trace_service.mark_run_failed(db, workflow_run_id=run.id)
-            raise
-
-        output_reference = {"output_sha256": _sha256(_serialize_output(extracted))}
+        output_reference = {"output_sha256": _sha256(_serialize_output(payload.extracted))}
         ai_trace = self._trace_service.record_ai_trace(
             db,
             workflow_step_trace_id=step.id,
             ai_component_name=AI_COMPONENT_NAME,
             status="succeeded",
-            provider=result.provider,
-            model_name=result.model,
+            provider=payload.provider_result.provider,
+            model_name=payload.provider_result.model,
             prompt_version=PROMPT_VERSION,
             input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
-            output_schema_version=result.schema_version,
-            latency_ms=result.latency_ms,
+            output_schema_version=payload.provider_result.schema_version,
+            latency_ms=payload.provider_result.latency_ms,
             input_reference=input_reference,
             output_reference=output_reference,
-            token_usage=result.token_usage,
+            token_usage=payload.provider_result.token_usage,
         )
 
         profile = self._profile_service.create_version(
@@ -183,12 +173,12 @@ class CandidateProfileExtractionWorkflow:
             resume_id=resume.id,
             status="extracted",
             source="ai_extracted",
-            profile_data=extracted.model_dump(),
+            profile_data=payload.extracted.model_dump(),
             provenance={
                 "workflow": WORKFLOW_TYPE,
-                "provider": result.provider,
-                "model": result.model,
-                "schema_version": result.schema_version or AI_CONTRACT_SCHEMA_VERSION,
+                "provider": payload.provider_result.provider,
+                "model": payload.provider_result.model,
+                "schema_version": payload.provider_result.schema_version or AI_CONTRACT_SCHEMA_VERSION,
             },
             organization_id=organization_id,
             make_current=True,
@@ -203,6 +193,90 @@ class CandidateProfileExtractionWorkflow:
             workflow_step_trace_id=step.id,
             ai_trace_id=ai_trace.id,
             version_number=profile.version_number,
+        )
+
+    def run(
+        self,
+        db: Session,
+        *,
+        resume_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        resume_text: str,
+    ) -> CandidateProfileExtractionResult:
+        """Execute extraction run by composing generate() outside DB transactions and persist()."""
+        resume = self._get_resume(db, resume_id=resume_id, organization_id=organization_id)
+        self._require_resume_text(resume_text)
+        input_reference = {
+            "entity": "resume",
+            "entity_id": str(resume.id),
+            "resume_text_sha256": _sha256(resume_text),
+        }
+
+        try:
+            payload = self.generate(resume_text=resume_text, resume_id=resume.id)
+        except ProviderError as error:
+            run = self._trace_service.start_run(
+                db,
+                organization_id=organization_id,
+                workflow_type=WORKFLOW_TYPE,
+                related_entity_type="resume",
+                related_entity_id=resume.id,
+                status="running",
+            )
+            step = self._trace_service.start_step(
+                db,
+                workflow_run_id=run.id,
+                step_name=STEP_NAME,
+                status="running",
+            )
+            self._record_failure_trace(db, step.id, input_reference)
+            self._trace_service.mark_step_failed(
+                db,
+                workflow_step_trace_id=step.id,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            self._trace_service.mark_run_failed(db, workflow_run_id=run.id)
+            raise
+        except ValidationError as error:
+            run = self._trace_service.start_run(
+                db,
+                organization_id=organization_id,
+                workflow_type=WORKFLOW_TYPE,
+                related_entity_type="resume",
+                related_entity_id=resume.id,
+                status="running",
+            )
+            step = self._trace_service.start_step(
+                db,
+                workflow_run_id=run.id,
+                step_name=STEP_NAME,
+                status="running",
+            )
+            self._trace_service.record_ai_trace(
+                db,
+                workflow_step_trace_id=step.id,
+                ai_component_name=AI_COMPONENT_NAME,
+                status="validation_failed",
+                prompt_version=PROMPT_VERSION,
+                input_schema_version=AI_CONTRACT_SCHEMA_VERSION,
+                input_reference=input_reference,
+                validation_error={"message": str(error)},
+            )
+            self._trace_service.mark_step_failed(
+                db,
+                workflow_step_trace_id=step.id,
+                error_type="ValidationError",
+                error_message=str(error),
+            )
+            self._trace_service.mark_run_failed(db, workflow_run_id=run.id)
+            raise
+
+        return self.persist(
+            db,
+            resume_id=resume.id,
+            organization_id=organization_id,
+            payload=payload,
         )
 
     def _get_resume(

@@ -1,5 +1,6 @@
 import apiClient from "./apiClient";
 import { listCandidateProfiles, listCandidateResumes } from "./resumeService";
+import { parseScore } from "../utils/score";
 
 // Candidate service. Contract: src/types/api/candidate.js.
 //
@@ -10,11 +11,11 @@ import { listCandidateProfiles, listCandidateResumes } from "./resumeService";
 // reads hit GET /candidates/{id}.
 
 // Maps a JobCandidateSummary (pool row) onto the candidate display model.
-// score comes back as a STRING ("85.000") — the client renders a rounded
+// score comes back as a STRING ("85.000") — the client keeps its numeric
 // number but never computes groups (the backend assigns `group` itself).
 function mapPoolRowToCandidate(row) {
-  const rawScore = Number(row.score);
-  const score = Number.isFinite(rawScore) ? Math.round(rawScore) : 0;
+  const rawScore = parseScore(row.score);
+  const score = rawScore;
   return {
     id: row.candidate_id,
     name: row.full_name || "Unknown",
@@ -72,6 +73,11 @@ function applyProfile(row, profile) {
   return {
     ...row,
     summary: typeof d.summary === "string" ? d.summary : row.summary,
+    // Keep CV-extracted contact values separate from recruiter-maintained
+    // candidate fields. A null candidate value can mean HR intentionally
+    // cleared it, so extracted values must never overwrite the canonical row.
+    profileEmail: typeof d.email === "string" ? d.email : "",
+    profilePhone: typeof d.phone === "string" ? d.phone : "",
     skills,
     matching: skills,
     experience: experience.length ? `${experience.length} positions` : row.experience,
@@ -156,3 +162,9 @@ export async function screenCandidates({ jobId, files }) {
   });
   return data;
 }
+
+export {
+  createScreeningBatch,
+  getScreeningBatch,
+  retryBatchItem,
+} from "./screeningBatchService";

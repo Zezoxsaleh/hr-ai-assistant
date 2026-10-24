@@ -60,6 +60,7 @@ def create_parent_records(
         job_id=job.id,
         candidate_id=candidate.id,
         resume_id=resume.id,
+        status="advanced",
     )
     db_session.add(application)
     db_session.commit()
@@ -111,6 +112,7 @@ def create_second_application(
         job_id=job_id,
         candidate_id=second_candidate.id,
         resume_id=second_resume.id,
+        status="advanced",
     )
     db_session.add(second_application)
     db_session.commit()
@@ -258,6 +260,7 @@ def test_same_candidate_across_different_jobs_conflicts(db_session: Session) -> 
         job_id=second_job.id,
         candidate_id=candidate.id,
         resume_id=second_resume.id,
+        status="advanced",
     )
     db_session.add(second_application)
     db_session.commit()
@@ -336,6 +339,7 @@ def test_different_candidate_and_interviewer_schedule_fine(db_session: Session) 
         job_id=application.job_id,
         candidate_id=second_candidate.id,
         resume_id=second_resume.id,
+        status="advanced",
     )
     db_session.add(second_application)
     db_session.commit()

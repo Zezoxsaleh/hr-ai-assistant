@@ -129,10 +129,8 @@ class ObservabilityService:
             raise ValidationError("WorkflowStepTrace does not belong to the expected run.")
         if organization_id is not None:
             run = db.get(WorkflowRun, step.workflow_run_id)
-            if run is None:
-                raise NotFoundError("WorkflowRun was not found.")
-            if run.organization_id != organization_id:
-                raise ValidationError("WorkflowStepTrace belongs to a different organization.")
+            if run is None or run.organization_id != organization_id:
+                raise NotFoundError("WorkflowStepTrace was not found.")
         return step
 
     def get_ai_trace(
@@ -148,10 +146,8 @@ class ObservabilityService:
             raise NotFoundError("AITrace was not found.")
         if organization_id is not None:
             run = db.get(WorkflowRun, trace.workflow_step_trace.workflow_run_id)
-            if run is None:
-                raise NotFoundError("WorkflowRun was not found.")
-            if run.organization_id != organization_id:
-                raise ValidationError("AITrace belongs to a different organization.")
+            if run is None or run.organization_id != organization_id:
+                raise NotFoundError("AITrace was not found.")
         return trace
 
     def list_workflow_steps(

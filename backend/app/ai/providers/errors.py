@@ -11,6 +11,10 @@ class ProviderError(Exception):
     """Base class for provider-independent AI provider errors."""
 
 
+class ProviderConfigurationError(ProviderError):
+    """The selected provider is missing required server configuration."""
+
+
 class ProviderTimeoutError(ProviderError):
     """The provider call exceeded its time budget."""
 

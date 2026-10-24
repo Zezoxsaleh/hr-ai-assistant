@@ -55,6 +55,10 @@ class InterviewService:
             candidate_id=candidate_id,
             job_id=job_id,
         )
+
+        # Stage G: Enforce Advance Gate
+        self._check_advance_gate(db, application)
+
         interviewer = None
         if interviewer_user_id is not None:
             interviewer = UserService().get(
@@ -86,6 +90,14 @@ class InterviewService:
                     "Only an approved interview question set can be attached to an interview."
                 )
             question_set = candidate_set
+
+        # Concurrency protection: lock application row to prevent race conditions
+        db.scalars(
+            select(JobApplication)
+            .where(JobApplication.id == application.id)
+            .with_for_update()
+        ).first()
+
         interval = _to_minutes(scheduled_time)
         conflicts = self.find_conflicts(
             db,
@@ -151,10 +163,8 @@ class InterviewService:
         organization_id: uuid.UUID,
     ) -> Interview:
         interview = db.get(Interview, interview_id)
-        if interview is None:
+        if interview is None or interview.organization_id != organization_id:
             raise NotFoundError("Interview was not found.")
-        if interview.organization_id != organization_id:
-            raise ValidationError("Interview belongs to a different organization.")
         return interview
 
     def cancel(
@@ -180,15 +190,64 @@ class InterviewService:
         interview_id: uuid.UUID,
         organization_id: uuid.UUID,
         feedback: dict[str, Any],
+        is_amendment: bool = False,
     ) -> Interview:
         interview = self.get(db, interview_id=interview_id, organization_id=organization_id)
         if interview.status == "cancelled":
             raise ValidationError("Feedback cannot be submitted for a cancelled interview.")
+        if interview.feedback is not None and not is_amendment:
+            raise ValidationError(
+                "Feedback has already been submitted for this interview. "
+                "Use an amendment to update submitted feedback."
+            )
+
+        # Validate rubric
+        for field in ("technical", "communication", "problem_solving"):
+            val = feedback.get(field)
+            if val is None or not isinstance(val, (int, float)) or not (1 <= val <= 5):
+                raise ValidationError(f"{field} rating must be between 1 and 5.")
+        overall = feedback.get("overall")
+        if overall is None or not (1.0 <= float(overall) <= 5.0):
+            raise ValidationError("overall rating must be between 1.0 and 5.0.")
+
         feedback["submitted_at"] = datetime.now().date().isoformat()
+        if is_amendment and interview.feedback:
+            history = interview.feedback.get("_history", [])
+            prev_copy = {k: v for k, v in interview.feedback.items() if k != "_history"}
+            history.append(prev_copy)
+            feedback["_history"] = history
+
         interview.feedback = feedback
         interview.status = "completed"
         db.flush()
         return interview
+
+    @staticmethod
+    def _check_advance_gate(db: Session, application: JobApplication) -> None:
+        """Enforce that only candidates with an authoritative HR 'advance' decision can be scheduled."""
+        from app.models.hr_decision import HRDecision
+
+        latest_decision = db.scalars(
+            select(HRDecision)
+            .where(HRDecision.job_application_id == application.id)
+            .order_by(HRDecision.created_at.desc(), HRDecision.id.desc())
+            .limit(1)
+        ).first()
+
+        if application.status == "advanced" or (
+            latest_decision is not None and latest_decision.decision == "advance"
+        ):
+            return
+
+        decision_state = (
+            latest_decision.decision
+            if latest_decision is not None
+            else application.status
+        )
+        raise ValidationError(
+            f"Interview scheduling denied: Application status is {decision_state!r}. "
+            "An authoritative HR 'advance' decision is required before scheduling an interview."
+        )
 
     def list_interviewers(
         self,
@@ -236,15 +295,11 @@ class InterviewService:
         job_id: uuid.UUID,
     ) -> JobApplication:
         candidate = db.get(Candidate, candidate_id)
-        if candidate is None:
+        if candidate is None or candidate.organization_id != organization_id:
             raise NotFoundError("Candidate was not found.")
-        if candidate.organization_id != organization_id:
-            raise ValidationError("Candidate belongs to a different organization.")
         job = db.get(Job, job_id)
-        if job is None:
+        if job is None or job.organization_id != organization_id:
             raise NotFoundError("Job was not found.")
-        if job.organization_id != organization_id:
-            raise ValidationError("Job belongs to a different organization.")
         statement = select(JobApplication).where(
             JobApplication.organization_id == organization_id,
             JobApplication.candidate_id == candidate_id,

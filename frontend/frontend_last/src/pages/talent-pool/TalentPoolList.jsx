@@ -22,6 +22,16 @@ const GROUP_SEARCH_LABEL = {
   lower_priority: "Lower Priority",
 };
 
+function SkillsCell({ skills }) {
+  if (!skills?.length) return <span className="muted-note">No extracted skills available</span>;
+  return (
+    <div className="talent-pool-skills" aria-label={`Profile skills: ${skills.join(", ")}`}>
+      {skills.slice(0, 4).map((skill) => <span className="chip" key={skill}>{skill}</span>)}
+      {skills.length > 4 && <span className="muted-note">+{skills.length - 4}</span>}
+    </div>
+  );
+}
+
 export default function TalentPoolList() {
   const [pool, setPool] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -46,7 +56,9 @@ export default function TalentPoolList() {
   useEffect(load, []);
 
   const filtered = pool.filter((c) =>
-    `${c.name} ${c.jobTitle} ${GROUP_SEARCH_LABEL[c.group] || ""} ${c.status}`.toLowerCase().includes(search.toLowerCase())
+    `${c.name} ${c.jobTitle} ${(c.skills || []).join(" ")} ${GROUP_SEARCH_LABEL[c.group] || ""} ${c.status}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
   );
 
   const columns = [
@@ -58,6 +70,7 @@ export default function TalentPoolList() {
       ),
     },
     { key: "jobTitle", header: "Role" },
+    { key: "skills", header: "Profile skills", render: (c) => <SkillsCell skills={c.skills} /> },
     { key: "group", header: "Group", render: (c) => <GroupPill group={c.group} /> },
     { key: "status", header: "Status", render: (c) => STATUS_LABEL[c.status] || c.status || "—" },
     { key: "score", header: "Score", render: (c) => <ScoreCell score={c.score} variant="text" /> },
@@ -72,7 +85,7 @@ export default function TalentPoolList() {
             className="btn btn-secondary btn-small"
             onClick={() => navigate(`/applications/${c.id}/review`)}
           >
-            Review <ArrowRight size={14} />
+            Review application <ArrowRight size={14} />
           </button>
         </div>
       ),
@@ -84,7 +97,12 @@ export default function TalentPoolList() {
       <div className="section-head">
         <div>
           <p className="eyebrow">TALENT POOL</p>
-          <h3>{pool.length} hold/advanced candidates from previous roles, ranked by evaluation score</h3>
+          <h2>Previously held or advanced applications</h2>
+          <p className="muted-note">
+            This view contains applications HR marked Hold or Advance for earlier roles. Review opens the original
+            application so its evidence and decision stay tied to that job. Search includes stored profile skill tags;
+            HERA does not calculate a new suitability score here.
+          </p>
         </div>
       </div>
 
@@ -94,15 +112,19 @@ export default function TalentPoolList() {
         error={error}
         errorMessage="Unable to load the talent pool. Please try again."
         onRetry={load}
-        emptyMessage="No talent pool candidates match your search."
+        emptyMessage={
+          search
+            ? "No held or advanced applications match your search."
+            : "No applications are currently on Hold or Advanced."
+        }
         header={
           <div className="panel-title" style={{ padding: "18px 22px 0" }}>
-            <h3>All Talent Pool Candidates</h3>
+            <h3>Previous applications</h3>
             <div className="toolbar" style={{ gap: 10 }}>
               <div className="search" style={{ maxWidth: 240 }}>
                 <Search size={16} />
                 <input
-                  placeholder="Search talent pool..."
+                  placeholder="Search name, role, or skill..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />

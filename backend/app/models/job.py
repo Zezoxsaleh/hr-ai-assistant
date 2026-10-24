@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from app.models.job_application import JobApplication
     from app.models.job_profile import JobProfile
     from app.models.organization import Organization
+    from app.models.screening_batch import ScreeningBatch
     from app.models.user import User
 
 
@@ -56,3 +57,4 @@ class Job(Base):
     created_by: Mapped[User | None] = relationship(back_populates="created_jobs")
     applications: Mapped[list[JobApplication]] = relationship(back_populates="job")
     profiles: Mapped[list[JobProfile]] = relationship(back_populates="job")
+    screening_batches: Mapped[list[ScreeningBatch]] = relationship(back_populates="job")

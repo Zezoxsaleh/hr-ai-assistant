@@ -80,7 +80,7 @@ export default function CandidatesList() {
       <div className="section-head">
         <div>
           <p className="eyebrow">CANDIDATES</p>
-          <h3>All Candidates</h3>
+          <h2>All Candidates</h2>
         </div>
         <button className="primary" onClick={() => navigate("/candidates/screen")}>
           <Plus size={18} /> New Screening
@@ -89,14 +89,19 @@ export default function CandidatesList() {
 
       <div className="toolbar">
         <div className="search">
-          <Search size={18} />
+          <Search size={18} aria-hidden="true" />
           <input
             placeholder="Search candidates..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search candidates"
           />
         </div>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+          aria-label="Filter candidates by status"
+        >
           <option value="all">All Status</option>
           {STATUS_OPTIONS.map((s) => (
             <option key={s.value} value={s.value}>
@@ -104,14 +109,18 @@ export default function CandidatesList() {
             </option>
           ))}
         </select>
-        <select value={sort} onChange={(e) => setSort(e.target.value)}>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          aria-label="Sort candidates"
+        >
           <option value="date">Newest First</option>
           <option value="name">Name</option>
         </select>
       </div>
 
       {!candidates.length ? (
-        <EmptyState message="No candidates found." />
+        <EmptyState message="No candidates yet. Start a screening to add candidates from CVs." />
       ) : (
         <>
           <div className="panel table-panel">
@@ -119,20 +128,33 @@ export default function CandidatesList() {
               <table>
                 <thead>
                   <tr>
-                    <th>Candidate</th>
-                    <th>Status</th>
-                    <th>Profile Skills</th>
-                    <th>Experience</th>
-                    <th>Added</th>
-                    <th />
+                    <th scope="col">Candidate</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Profile Skills</th>
+                    <th scope="col">Experience</th>
+                    <th scope="col">Added</th>
+                    <th scope="col"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {paged.map((c) => (
-                    <tr key={c.id} className="clickable" onClick={() => navigate(`/candidates/${c.id}`)}>
+                    <tr
+                      key={c.id}
+                      className="clickable"
+                      tabIndex={0}
+                      role="link"
+                      aria-label={`View candidate profile for ${c.name}`}
+                      onClick={() => navigate(`/candidates/${c.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          navigate(`/candidates/${c.id}`);
+                        }
+                      }}
+                    >
                       <td>
                         <div className="candidate-cell">
-                          <div className="mini-avatar">
+                          <div className="mini-avatar" aria-hidden="true">
                             {c.name
                               .split(" ")
                               .map((x) => x[0])
@@ -161,14 +183,30 @@ export default function CandidatesList() {
                       <td>{c.experience || "—"}</td>
                       <td>{c.appliedAt ? new Date(c.appliedAt).toLocaleDateString() : "—"}</td>
                       <td>
-                        <ChevronRight size={17} />
+                        <ChevronRight size={17} aria-hidden="true" />
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {!filtered.length && <EmptyState message="No candidates match your filters." />}
+            {!filtered.length && (
+              <EmptyState
+                message="No candidates match your search or status filter."
+                action={(
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => {
+                      setSearch("");
+                      setStatus("all");
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                )}
+              />
+            )}
           </div>
 
           <Pagination total={filtered.length} pageSize={PAGE_SIZE} page={page} onPageChange={setPage} />

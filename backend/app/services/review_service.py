@@ -10,11 +10,13 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Candidate,
+    CandidateProfile,
     CandidateEvaluation,
     HRDecision,
     Job,
     JobApplication,
     MatchEvidence,
+    Resume,
 )
 from app.services.candidate_pool_service import (
     VALID_APPLICATION_STATUSES,
@@ -65,6 +67,7 @@ class TalentPoolRow:
     current_evaluation: CandidateEvaluation | None
     latest_decision: HRDecision | None
     group: str
+    skills: list[str]
 
 
 def _requirement_topic(requirement_ref: dict[str, Any] | None) -> str:
@@ -276,6 +279,27 @@ class ReviewService:
 
         rows = db.execute(query).all()
 
+        skills_by_application: dict[uuid.UUID, list[str]] = {}
+        if rows:
+            application_ids = [application.id for application, *_rest in rows]
+            profile_rows = db.execute(
+                select(JobApplication.id, CandidateProfile.profile_data)
+                .join(Resume, Resume.id == JobApplication.resume_id)
+                .join(CandidateProfile, CandidateProfile.resume_id == Resume.id)
+                .where(
+                    JobApplication.id.in_(application_ids),
+                    CandidateProfile.is_current.is_(True),
+                )
+            ).all()
+            for application_id, profile_data in profile_rows:
+                raw_skills = profile_data.get("skills", []) if isinstance(profile_data, dict) else []
+                if isinstance(raw_skills, list):
+                    skills_by_application[application_id] = [
+                        skill.strip()
+                        for skill in raw_skills
+                        if isinstance(skill, str) and skill.strip()
+                    ][:12]
+
         entries = [
             TalentPoolRow(
                 application=application,
@@ -284,6 +308,7 @@ class ReviewService:
                 current_evaluation=evaluation,
                 latest_decision=decision,
                 group=assign_group(self._as_decimal(evaluation.score if evaluation else None)),
+                skills=skills_by_application.get(application.id, []),
             )
             for application, candidate, job, evaluation, decision in rows
         ]

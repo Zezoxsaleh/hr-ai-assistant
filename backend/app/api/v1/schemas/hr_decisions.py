@@ -10,6 +10,7 @@ class HRDecisionCreate(BaseModel):
     decision: str
     reason: str | None = None
     candidate_evaluation_id: UUID | None = None
+    expected_evaluation_id: UUID | None = None
 
 
 class HRDecisionResponse(BaseModel):

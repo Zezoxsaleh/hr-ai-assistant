@@ -97,26 +97,46 @@ def create_parent_records(
     return organization, user, application, job_profile, candidate_profile
 
 
+def review_guide(purpose: str, basis: str = "job_requirement", quote: str | None = None) -> dict:
+    return {
+        "purpose": purpose,
+        "evidence_basis": basis,
+        "source_quote": quote,
+        "interviewer_looks_for": "A clear approach, relevant example, and validation method.",
+        "evaluation_rubric": [
+            "Explains the approach in a clear sequence.",
+            "Uses a relevant example or trade-off.",
+            "Describes how correctness would be checked.",
+        ],
+    }
+
+
 def valid_question_set_payload() -> dict:
     return {
+        "schema_version": "1.2",
         "questions": [
             {
                 "category": "technical",
                 "text": "Walk me through how you have used Python to build REST APIs.",
                 "topic": "Python",
                 "requirement_key": requirement_key("Python", "must_have"),
+                "review_guide": review_guide("Explore practical Python experience."),
             },
             {
                 "category": "technical",
                 "text": "Describe your hands-on experience containerizing services with Docker.",
                 "topic": "Docker",
                 "requirement_key": requirement_key("Docker", "important"),
+                "review_guide": review_guide("Explore practical Docker experience."),
             },
             {
                 "category": "candidate_specific",
                 "text": "Walk me through the most complex thing you built with PostgreSQL.",
                 "topic": "PostgreSQL",
                 "requirement_key": None,
+                "review_guide": review_guide(
+                    "Verify PostgreSQL experience.", "verification_question"
+                ),
             },
         ]
     }
@@ -193,6 +213,56 @@ def test_questions_persisted_in_order_with_topics(db_session: Session) -> None:
     assert [question.position for question in question_set.questions] == [0, 1, 2]
     assert question_set.questions[0].topic == "Python"
     assert question_set.questions[0].requirement_key == requirement_key("Python", "must_have")
+
+
+def test_verified_cv_question_guide_is_validated_and_persisted(db_session: Session) -> None:
+    organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    exact_quote = "Built PostgreSQL services handling 2M records."
+    application.resume.extracted_text = f"Projects: {exact_quote}"
+    payload = valid_question_set_payload()
+    payload["questions"][2]["review_guide"] = review_guide(
+        "Explore the verified PostgreSQL project experience.",
+        "verified_cv_evidence",
+        exact_quote,
+    )
+    workflow, _ = make_workflow(payload=payload)
+
+    result = workflow.run(
+        db_session,
+        job_application_id=application.id,
+        organization_id=organization.id,
+    )
+    db_session.commit()
+
+    question_set = db_session.get(InterviewQuestionSet, result.question_set_id)
+    stored_guide = question_set.questions[2].review_guide
+    assert stored_guide["evidence_basis"] == "verified_cv_evidence"
+    assert stored_guide["source_quote"] == exact_quote
+    assert stored_guide["source_quote"] in application.resume.extracted_text
+
+
+def test_unverified_cv_question_quote_fails_without_persisting(db_session: Session) -> None:
+    organization, _user, application, _job_profile, _candidate_profile = create_parent_records(
+        db_session
+    )
+    application.resume.extracted_text = "Projects: Built PostgreSQL services."
+    payload = valid_question_set_payload()
+    payload["questions"][2]["review_guide"] = review_guide(
+        "Explore a project.", "verified_cv_evidence", "Used PostgreSQL at scale."
+    )
+    workflow, _ = make_workflow(payload=payload)
+
+    with pytest.raises(ValidationError, match="not found verbatim"):
+        workflow.run(
+            db_session,
+            job_application_id=application.id,
+            organization_id=organization.id,
+        )
+    db_session.commit()
+
+    assert count_rows(db_session, InterviewQuestionSet) == 0
 
 
 def test_regeneration_creates_new_version_and_preserves_previous(db_session: Session) -> None:
@@ -377,11 +447,13 @@ def test_question_key_must_exist_in_supplied_set(db_session: Session) -> None:
     )
     unknown_key = requirement_key("Unknown", "must_have")
     payload = {
+        "schema_version": "1.2",
         "questions": [
             {
                 "category": "technical",
                 "text": "Question about an unknown requirement.",
                 "requirement_key": unknown_key,
+                "review_guide": review_guide("Explore this requirement."),
             }
         ]
     }
@@ -405,12 +477,16 @@ def test_question_text_uses_readable_topics_not_raw_keys(db_session: Session) ->
     )
     # Force a "gap" requirement whose only representation uses an opaque ref.
     payload = {
+        "schema_version": "1.2",
         "questions": [
             {
                 "category": "candidate_specific",
                 "text": "The role expects Python experience; the candidate lacks it.",
                 "topic": "Python",
                 "requirement_key": None,
+                "review_guide": review_guide(
+                    "Check the candidate's approach.", "verification_question"
+                ),
             }
         ]
     }
@@ -470,7 +546,7 @@ def test_provenance_contains_workflow_provider_model_schema(db_session: Session)
     assert question_set.provenance["workflow"] == "interview_question_generation"
     assert question_set.provenance["provider"] == "fake"
     assert question_set.provenance["model"] == "fake-question-model"
-    assert question_set.provenance["schema_version"] == "1.1"
+    assert question_set.provenance["schema_version"] == "1.2"
 
 
 def test_uses_fake_provider_without_network_calls(db_session: Session) -> None:

@@ -16,6 +16,7 @@ class InterviewQuestionWrite(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     topic: str | None = Field(default=None, max_length=250)
     requirement_key: str | None = None
+    review_guide: dict[str, Any] | None = None
 
 
 class InterviewQuestionSetCreate(BaseModel):
@@ -33,6 +34,7 @@ class InterviewQuestionResponse(BaseModel):
     text: str
     topic: str | None = None
     requirement_key: str | None = None
+    review_guide: dict[str, Any] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

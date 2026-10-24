@@ -3,33 +3,48 @@ import { NavLink } from "react-router-dom";
 import {
   LayoutDashboard,
   BriefcaseBusiness,
+  FileUp,
+  ListOrdered,
   Users,
-  BadgeCheck,
   ClipboardList,
+  CalendarClock,
   Star,
   BarChart3,
   Settings,
-  ListOrdered,
-  CalendarClock,
+  Activity,
 } from "lucide-react";
 import BrandIcon from "../common/BrandIcon";
 import { BRAND } from "../../config/brand";
+import useAuth from "../../hooks/useAuth";
 
-const NAV_ITEMS = [
+// Core MVP recruiting workflow
+const PRIMARY_NAV_ITEMS = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
-  { to: "/candidates", label: "Candidates", icon: Users },
-  { to: "/evaluations", label: "Evaluations", icon: BadgeCheck },
+  { to: "/candidates/screen", label: "Screening", icon: FileUp },
   { to: "/matching-results", label: "Matching Results", icon: ListOrdered },
+  { to: "/candidates", label: "Candidates", icon: Users },
   { to: "/applications", label: "Applications", icon: ClipboardList },
+];
+
+// Secondary operations and pipeline tools
+const SECONDARY_NAV_ITEMS = [
   { to: "/interviews", label: "Interviews", icon: CalendarClock },
   { to: "/talent-pool", label: "Talent Pool", icon: Star },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
 ];
 
+// Administrator-only configuration and observability
+const ADMIN_NAV_ITEMS = [
+  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/ai-activity", label: "AI Activity", icon: Activity },
+];
+
 export default function Sidebar() {
+  const { isAdmin } = useAuth();
+
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="Sidebar navigation">
       <div className="brand">
         <div className="brand-icon">
           <BrandIcon size={20} />
@@ -40,28 +55,66 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <nav>
-        {NAV_ITEMS.map(({ to, label, icon: Icon, badge }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-          >
-            <Icon size={19} />
-            <span>{label}</span>
-            {badge ? <span className="nav-badge">{badge}</span> : null}
-          </NavLink>
-        ))}
+      <nav aria-label="Main navigation">
+        <div className="nav-section" role="group" aria-label="Primary workflow">
+          {PRIMARY_NAV_ITEMS.map(({ to, label, icon: Icon, badge }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end
+              title={label}
+              aria-label={label}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              <Icon size={19} aria-hidden="true" />
+              <span>{label}</span>
+              {badge ? <span className="nav-badge">{badge}</span> : null}
+            </NavLink>
+          ))}
+        </div>
+
+        <div className="nav-section" role="group" aria-label="Secondary tools">
+          <div className="nav-section-title" aria-hidden="true">
+            Operations
+          </div>
+          {SECONDARY_NAV_ITEMS.map(({ to, label, icon: Icon, badge }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end
+              title={label}
+              aria-label={label}
+              className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+            >
+              <Icon size={19} aria-hidden="true" />
+              <span>{label}</span>
+              {badge ? <span className="nav-badge">{badge}</span> : null}
+            </NavLink>
+          ))}
+        </div>
       </nav>
 
       <div className="sidebar-bottom">
-        <NavLink
-          to="/settings"
-          className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-        >
-          <Settings size={19} />
-          <span>Settings</span>
-        </NavLink>
+        {isAdmin && (
+          <div className="nav-section sidebar-admin-section" role="group" aria-label="Administration">
+            <div className="nav-section-title" aria-hidden="true">
+              Admin
+            </div>
+            {ADMIN_NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end
+                title={label}
+                aria-label={label}
+                className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </div>
+        )}
         <div className="powered">{BRAND.powered}</div>
       </div>
     </aside>

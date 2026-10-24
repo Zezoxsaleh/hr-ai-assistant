@@ -167,7 +167,7 @@ def test_cross_organization_thread_is_invisible(db_session: Session) -> None:
     )
     db_session.commit()
 
-    with pytest.raises(ValidationError, match="different organization"):
+    with pytest.raises(NotFoundError, match="ChatThread was not found"):
         ChatService().get_thread(db_session, thread_id=thread.id, organization_id=organization.id)
 
 

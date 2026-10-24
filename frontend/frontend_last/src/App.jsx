@@ -1,12 +1,12 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { IdentityProvider } from "./context/IdentityContext";
+import { AuthProvider } from "./context/AuthContext";
 import ProtectedRoute from "./components/common/ProtectedRoute";
 
 import AuthLayout from "./layouts/AuthLayout";
 import MainLayout from "./layouts/MainLayout";
 
-import DevelopmentIdentity from "./pages/identity/DevelopmentIdentity";
+import Login from "./pages/auth/Login";
 
 import Dashboard from "./pages/dashboard/Dashboard";
 import JobsList from "./pages/jobs/JobsList";
@@ -33,14 +33,17 @@ import NotFound from "./pages/NotFound";
 export default function App() {
   return (
     <BrowserRouter>
-      <IdentityProvider>
+      <AuthProvider>
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-          {/* Development identity (not production authentication) */}
+          {/* Authentication flow */}
           <Route element={<AuthLayout />}>
-            <Route path="/identity" element={<DevelopmentIdentity />} />
+            <Route path="/login" element={<Login />} />
           </Route>
+
+          {/* Legacy identity route redirected */}
+          <Route path="/identity" element={<Navigate to="/dashboard" replace />} />
 
           {/* Protected app routes */}
           <Route
@@ -69,8 +72,18 @@ export default function App() {
 
             <Route path="/talent-pool" element={<TalentPoolList />} />
             <Route path="/matching-results" element={<MatchingResults />} />
+            <Route path="/matching" element={<MatchingResults />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
-            <Route path="/settings" element={<AISettings />} />
+
+            {/* Admin-only settings route */}
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute allowedRoles={["admin", "administrator"]}>
+                  <AISettings />
+                </ProtectedRoute>
+              }
+            />
 
             <Route path="/interviews" element={<InterviewsList />} />
             <Route path="/interviews/schedule" element={<ScheduleInterview />} />
@@ -81,7 +94,7 @@ export default function App() {
 
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </IdentityProvider>
+      </AuthProvider>
     </BrowserRouter>
   );
 }

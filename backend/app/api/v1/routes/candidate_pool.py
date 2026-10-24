@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -9,6 +10,18 @@ from app.api.v1.schemas.candidate_pool import JobCandidateSummary, TalentPoolRow
 from app.core.database import get_db
 from app.services.candidate_pool_service import CandidatePoolService
 from app.services.review_service import ReviewService
+
+def _format_score(score: Any) -> str | None:
+    if score is None:
+        return None
+    try:
+        val = Decimal(str(score))
+        if val == val.to_integral():
+            return str(int(val))
+        return f"{float(val):.2f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(score)
+
 
 router = APIRouter()
 
@@ -43,11 +56,7 @@ def list_job_candidates(
     summaries = []
     for entry in entries:
         evaluation = entry.current_evaluation
-        score = (
-            str(evaluation.score)
-            if evaluation is not None and evaluation.score is not None
-            else None
-        )
+        score = _format_score(evaluation.score if evaluation is not None else None)
         decision = entry.latest_decision
         summaries.append(
             JobCandidateSummary(
@@ -83,11 +92,7 @@ def list_talent_pool(
     talent_pool = []
     for row in rows:
         evaluation = row.current_evaluation
-        score = (
-            str(evaluation.score)
-            if evaluation is not None and evaluation.score is not None
-            else None
-        )
+        score = _format_score(evaluation.score if evaluation is not None else None)
         decision = row.latest_decision
         talent_pool.append(
             TalentPoolRowResponse(
@@ -101,6 +106,7 @@ def list_talent_pool(
                 status=row.application.status,
                 score=score,
                 group=row.group,
+                skills=row.skills,
                 decision=decision.decision if decision else None,
                 decision_created_at=decision.created_at if decision else None,
             )

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   createJob,
@@ -34,6 +34,8 @@ export default function JobForm() {
   const navigate = useNavigate();
 
   const [job, setJob] = useState(EMPTY_JOB);
+  const jobRef = useRef(job);
+  const userEditedFields = useRef(new Set());
   const [loading, setLoading] = useState(isEdit);
   const [saving, setSaving] = useState(false);
 
@@ -57,7 +59,7 @@ export default function JobForm() {
         setLoading(false);
         return;
       }
-      setJob({
+      const loadedJob = {
         title: data.title || "",
         department: data.department || "",
         location: data.location || "",
@@ -67,27 +69,34 @@ export default function JobForm() {
         description: data.description || "",
         requirementsText: (data.requirements || []).join("\n"),
         requiredSkillsText: (data.requiredSkills || []).join(", "),
-      });
+      };
+      jobRef.current = loadedJob;
+      setJob(loadedJob);
       setLoading(false);
     });
   }, [id, isEdit]);
 
-  function isFieldEmpty(name) {
+  function isFieldEmpty(name, currentJob = jobRef.current) {
     switch (name) {
       case "title":
-        return !job.title;
+        return !currentJob.title;
       case "department":
-        return !job.department;
+        return !currentJob.department;
       case "location":
-        return !job.location;
+        return !currentJob.location;
       case "type":
-        return !job.type || job.type === DEFAULT_JOB_TYPE;
+        return (
+          !currentJob.type ||
+          (!isEdit &&
+            currentJob.type === DEFAULT_JOB_TYPE &&
+            !userEditedFields.current.has(name))
+        );
       case "experience":
-        return !job.experience;
+        return !currentJob.experience;
       case "requirementsText":
-        return !job.requirementsText;
+        return !currentJob.requirementsText;
       case "requiredSkillsText":
-        return !job.requiredSkillsText;
+        return !currentJob.requiredSkillsText;
       default:
         return false;
     }
@@ -95,7 +104,10 @@ export default function JobForm() {
 
   const onChange = (e) => {
     const name = e.target.name;
-    setJob({ ...job, [name]: e.target.value });
+    const nextJob = { ...jobRef.current, [name]: e.target.value };
+    jobRef.current = nextJob;
+    setJob(nextJob);
+    userEditedFields.current.add(name);
     if (aiFields.has(name)) {
       const next = new Set(aiFields);
       next.delete(name);
@@ -104,58 +116,79 @@ export default function JobForm() {
   };
 
   const onFill = async () => {
-    if (!job.description) {
+    const fields = [
+      "title",
+      "department",
+      "location",
+      "type",
+      "experience",
+      "requirementsText",
+      "requiredSkillsText",
+    ];
+    const currentJob = jobRef.current;
+    if (!currentJob.description) {
       setFillStatus("incomplete");
+      return;
+    }
+    if (!fields.some((name) => isFieldEmpty(name, currentJob))) {
+      setFillStatus("no-fields");
       return;
     }
     setFillStatus("analyzing");
     setFillError("");
 
     try {
-      const suggestion = await suggestJobDraft(job.description);
+      const suggestion = await suggestJobDraft(currentJob.description);
+      const latestJob = jobRef.current;
+      if (latestJob.description !== currentJob.description) {
+        setFillStatus("changed");
+        return;
+      }
       const applied = {};
       const appliedNames = [];
-      if (isFieldEmpty("title") && suggestion.title) {
+      if (isFieldEmpty("title", latestJob) && suggestion.title) {
         applied.title = suggestion.title;
         appliedNames.push("title");
       }
-      if (isFieldEmpty("department") && suggestion.department) {
+      if (isFieldEmpty("department", latestJob) && suggestion.department) {
         applied.department = suggestion.department;
         appliedNames.push("department");
       }
-      if (isFieldEmpty("location") && suggestion.location) {
+      if (isFieldEmpty("location", latestJob) && suggestion.location) {
         applied.location = suggestion.location;
         appliedNames.push("location");
       }
-      if (isFieldEmpty("type") && suggestion.type) {
+      if (isFieldEmpty("type", latestJob) && suggestion.type) {
         applied.type = suggestion.type;
         appliedNames.push("type");
       }
-      if (isFieldEmpty("experience") && suggestion.experience) {
+      if (isFieldEmpty("experience", latestJob) && suggestion.experience) {
         applied.experience = suggestion.experience;
         appliedNames.push("experience");
       }
-      if (isFieldEmpty("requirementsText") && suggestion.requirements.length) {
+      if (isFieldEmpty("requirementsText", latestJob) && suggestion.requirements.length) {
         applied.requirementsText = suggestion.requirements.join("\n");
         appliedNames.push("requirementsText");
       }
-      if (isFieldEmpty("requiredSkillsText") && suggestion.requiredSkills.length) {
+      if (isFieldEmpty("requiredSkillsText", latestJob) && suggestion.requiredSkills.length) {
         applied.requiredSkillsText = suggestion.requiredSkills.join(", ");
         appliedNames.push("requiredSkillsText");
       }
 
       if (!appliedNames.length) {
-        setFillStatus("incomplete");
+        setFillStatus(fields.some((name) => isFieldEmpty(name, latestJob)) ? "incomplete" : "no-fields");
         return;
       }
-      setJob((current) => ({ ...current, ...applied }));
+      const nextJob = { ...latestJob, ...applied };
+      jobRef.current = nextJob;
+      setJob(nextJob);
       setAiFields(
         (current) => new Set([...Array.from(current), ...appliedNames])
       );
       setFillStatus("ready");
-    } catch (error) {
+    } catch {
       setFillStatus("error");
-      setFillError(error?.message || "HERA could not read the description.");
+      setFillError("HERA could not suggest job fields. Your entries are unchanged. Try again.");
     }
   };
 
@@ -220,7 +253,7 @@ export default function JobForm() {
   const fillButtonLabel =
     fillStatus === "analyzing"
       ? "HERA is reading the description..."
-      : "Fill with HERA";
+      : "Suggest fields with HERA";
 
   return (
     <section className="content-grid">
@@ -238,6 +271,7 @@ export default function JobForm() {
             type="button"
             onClick={onFill}
             disabled={fillStatus === "analyzing" || !job.description}
+            aria-describedby="hera-fill-help"
           >
             {fillButtonLabel}
           </button>
@@ -255,6 +289,12 @@ export default function JobForm() {
           )}
         </div>
 
+        <p className="hera-note" id="hera-fill-help">
+          HERA uses the description to suggest title, department, location, employment type, experience,
+          requirements, and required skills.
+          Suggestions fill blank fields only. Review and edit them before saving; existing entries are kept.
+        </p>
+
         {fillStatus === "analyzing" && (
           <p className="hera-note" role="status">
             HERA is suggesting form fields from your description. Nothing is
@@ -263,19 +303,28 @@ export default function JobForm() {
         )}
         {fillStatus === "ready" && (
           <p className="hera-note" role="status">
-            HERA filled the empty fields below. Every suggested value is marked
+            HERA suggested values for blank fields below. Every suggested value is marked
             <span className="ai-chip">AI</span> and stays editable until you
-            change it.
+            save. Other entries were kept.
           </p>
         )}
         {fillStatus === "incomplete" && (
           <p className="hera-note" role="status">
-            HERA did not detect new values for the empty fields. Try a fuller
-            job description.
+            HERA could not suggest values for the remaining blank fields. Add more role detail to the description and try again.
+          </p>
+        )}
+        {fillStatus === "no-fields" && (
+          <p className="hera-note" role="status">
+            There are no blank fields for HERA to fill. Your existing entries are unchanged.
+          </p>
+        )}
+        {fillStatus === "changed" && (
+          <p className="hera-note" role="status">
+            The description changed while HERA was reading it, so no suggestions were applied. Run the suggestion again to use the updated description.
           </p>
         )}
         {fillStatus === "error" && (
-          <p className="hera-note hera-error" role="status">
+          <p className="hera-note hera-error" role="alert">
             {fillError}
           </p>
         )}
@@ -326,7 +375,17 @@ export default function JobForm() {
                 AI
               </span>
             )}
-            <select name="type" value={job.type} onChange={onChange}>
+            <select
+              name="type"
+              value={job.type}
+              onChange={onChange}
+              onPointerDown={() => userEditedFields.current.add("type")}
+              onKeyDown={(event) => {
+                if (["ArrowUp", "ArrowDown", "Home", "End", "Enter", " "].includes(event.key)) {
+                  userEditedFields.current.add("type");
+                }
+              }}
+            >
               <option>Full-time</option>
               <option>Part-time</option>
               <option>Contract</option>

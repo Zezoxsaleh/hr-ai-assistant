@@ -6,14 +6,24 @@ CRUD services for API-layer resource management. Services accept a caller-owned
 SQLAlchemy Session; they add/flush/query but never commit.
 """
 
+from app.services.audit_service import AuditService
 from app.services.candidate_pool_service import CandidatePoolService
 from app.services.candidate_profile_service import CandidateProfileService
 from app.services.candidate_service import CandidateService
 from app.services.decision_service import VALID_DECISIONS, DecisionService
 from app.services.errors import (
+    UPLOAD_ERROR_BATCH_LIMIT_EXCEEDED,
+    UPLOAD_ERROR_CORRUPT,
+    UPLOAD_ERROR_ENCRYPTED,
+    UPLOAD_ERROR_INVALID_ARCHIVE,
+    UPLOAD_ERROR_NO_TEXT,
+    UPLOAD_ERROR_PAGE_LIMIT_EXCEEDED,
+    UPLOAD_ERROR_TOO_LARGE,
+    UPLOAD_ERROR_UNSUPPORTED_TYPE,
     ApplicationError,
     InvalidStateError,
     NotFoundError,
+    UploadValidationError,
     ValidationError,
     VersionConflictError,
 )
@@ -40,6 +50,7 @@ from app.services.workflow_trace_service import WorkflowTraceService
 __all__ = [
     "AIFailureSummary",
     "ApplicationError",
+    "AuditService",
     "CandidatePoolService",
     "CandidateProfileService",
     "CandidateService",
@@ -57,6 +68,15 @@ __all__ = [
     "ResumeService",
     "StorageProvider",
     "TextExtractor",
+    "UPLOAD_ERROR_BATCH_LIMIT_EXCEEDED",
+    "UPLOAD_ERROR_CORRUPT",
+    "UPLOAD_ERROR_ENCRYPTED",
+    "UPLOAD_ERROR_INVALID_ARCHIVE",
+    "UPLOAD_ERROR_NO_TEXT",
+    "UPLOAD_ERROR_PAGE_LIMIT_EXCEEDED",
+    "UPLOAD_ERROR_TOO_LARGE",
+    "UPLOAD_ERROR_UNSUPPORTED_TYPE",
+    "UploadValidationError",
     "UserService",
     "VALID_DECISIONS",
     "ValidationError",

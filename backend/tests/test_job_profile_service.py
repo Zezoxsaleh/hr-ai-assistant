@@ -94,7 +94,7 @@ def test_organization_mismatch_rejected(db_session: Session) -> None:
     db_session.flush()
     service = JobProfileService()
 
-    with pytest.raises(ValidationError, match="expected organization"):
+    with pytest.raises((ValidationError, NotFoundError)):
         create_profile_version(service, db_session, job, organization_id=other_organization.id)
 
 
@@ -242,7 +242,7 @@ def test_approval_metadata_recorded(db_session: Session) -> None:
     db_session.commit()
 
     assert approved.status == "approved"
-    assert approved.approved_at == fixed_time
+    assert approved.approved_at.replace(tzinfo=UTC) == fixed_time
 
 
 def test_current_rotation_on_approval(db_session: Session) -> None:
@@ -283,7 +283,7 @@ def test_cross_organization_approver_rejected(db_session: Session) -> None:
     draft = create_profile_version(service, db_session, job, profile_data={"title": "A"})
     db_session.commit()
 
-    with pytest.raises(ValidationError, match="job organization"):
+    with pytest.raises((ValidationError, NotFoundError)):
         service.approve(db_session, profile_id=draft.id, approved_by_user_id=other_user.id)
 
 

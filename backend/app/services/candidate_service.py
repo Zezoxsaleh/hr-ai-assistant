@@ -43,10 +43,8 @@ class CandidateService:
     ) -> Candidate:
         """Return one candidate by id, enforcing organization scope."""
         candidate = db.get(Candidate, candidate_id)
-        if candidate is None:
+        if candidate is None or candidate.organization_id != organization_id:
             raise NotFoundError("Candidate was not found.")
-        if candidate.organization_id != organization_id:
-            raise ValidationError("Candidate does not belong to the expected organization.")
         return candidate
 
     def list(

@@ -20,6 +20,7 @@ from app.ai.contracts.hera import (
 )
 from app.ai.contracts.interview_questions import (
     InterviewQuestionOutput,
+    InterviewQuestionReviewGuide,
     InterviewQuestionSetOutput,
     validate_interview_question_set,
 )
@@ -39,6 +40,8 @@ from app.ai.contracts.match_evidence import (
 )
 from app.ai.contracts.schema import (
     AI_CONTRACT_SCHEMA_VERSION,
+    INTERVIEW_QUESTION_SCHEMA_VERSION,
+    JOB_PROFILE_EXTRACTION_SCHEMA_VERSION,
     SUPPORTED_SCHEMA_VERSIONS,
 )
 from app.ai.contracts.validation import (
@@ -61,7 +64,10 @@ __all__ = [
     "HERAReplyOutput",
     "HERAToolCall",
     "InterviewQuestionOutput",
+    "InterviewQuestionReviewGuide",
     "InterviewQuestionSetOutput",
+    "INTERVIEW_QUESTION_SCHEMA_VERSION",
+    "JOB_PROFILE_EXTRACTION_SCHEMA_VERSION",
     "JobDraftSuggestionOutput",
     "JobProfileExtractionOutput",
     "JobRequirement",

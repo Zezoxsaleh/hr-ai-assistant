@@ -117,6 +117,28 @@ class TestStructuredExtraction:
     def test_certifications(self) -> None:
         certifications = extract_certifications(RICH_RESUME)
         assert any("Solutions Architect" in item for item in certifications)
+        assert "Professional Scrum Master I" in certifications
+
+    def test_certification_headings_and_neighboring_sections_are_not_credentials(self) -> None:
+        resume = """
+        PROFESSIONAL SUMMARY
+        Experienced product manager
+        PROFESSIONAL EXPERIENCE
+        Senior Product Manager, 2018 - 2022
+        CERTIFICATIONS
+        AWS Certified Solutions Architect
+        EDUCATION
+        Professional Certificate in Product Design
+        """
+        assert extract_certifications(resume) == ["AWS Certified Solutions Architect"]
+
+    def test_empty_certification_section_stays_empty(self) -> None:
+        assert extract_certifications("CERTIFICATIONS\n\nPROFESSIONAL EXPERIENCE\nEngineer") == []
+
+    def test_certification_keyword_without_explicit_section_is_supported(self) -> None:
+        assert extract_certifications("Licensed Clinical Social Worker") == [
+            "Licensed Clinical Social Worker"
+        ]
 
 
 class TestContractPayloads:

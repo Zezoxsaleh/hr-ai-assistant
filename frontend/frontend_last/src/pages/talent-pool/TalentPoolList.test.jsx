@@ -22,6 +22,7 @@ const POOL_ROWS = [
     score: 88,
     status: "hold",
     decision: "advance",
+    skills: ["Python", "PostgreSQL"],
   },
 ];
 
@@ -53,6 +54,7 @@ describe("TalentPoolList (RankedCandidateList integration)", () => {
     expect(screen.getByText("Hold")).toBeInTheDocument();
     expect(screen.getByText("88")).toBeInTheDocument();
     expect(screen.getByText("advance")).toBeInTheDocument();
+    expect(screen.getByText("Python")).toBeInTheDocument();
   });
 
   it("navigates to the application review on row click", async () => {
@@ -80,8 +82,19 @@ describe("TalentPoolList (RankedCandidateList integration)", () => {
     renderPage();
 
     await screen.findByText("Grace Hopper");
-    await user.type(screen.getByPlaceholderText("Search talent pool..."), "zzz-none");
+    await user.type(screen.getByPlaceholderText("Search name, role, or skill..."), "zzz-none");
 
-    expect(screen.getByText("No talent pool candidates match your search.")).toBeInTheDocument();
+    expect(screen.getByText("No held or advanced applications match your search.")).toBeInTheDocument();
+  });
+
+  it("finds previously reviewed candidates by stored profile skill", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("Grace Hopper");
+    await user.type(screen.getByPlaceholderText("Search name, role, or skill..."), "PostgreSQL");
+
+    expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
   });
 });

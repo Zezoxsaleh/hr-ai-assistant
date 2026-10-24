@@ -61,10 +61,8 @@ class JobApplicationService:
     ) -> JobApplication:
         """Return one job application by id, enforcing organization scope."""
         application = db.get(JobApplication, application_id)
-        if application is None:
+        if application is None or application.organization_id != organization_id:
             raise NotFoundError("JobApplication was not found.")
-        if application.organization_id != organization_id:
-            raise ValidationError("JobApplication does not belong to the expected organization.")
         return application
 
     def list_by_job(
@@ -81,7 +79,10 @@ class JobApplicationService:
         return list(
             db.scalars(
                 select(JobApplication)
-                .where(JobApplication.job_id == job_id)
+                .where(
+                    JobApplication.job_id == job_id,
+                    JobApplication.organization_id == organization_id,
+                )
                 .order_by(JobApplication.created_at)
             )
         )

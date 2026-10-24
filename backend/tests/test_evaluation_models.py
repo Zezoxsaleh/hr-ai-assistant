@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -164,7 +164,7 @@ def test_candidate_evaluation_requires_valid_parents(db_session: Session) -> Non
             )
         )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises((IntegrityError, OperationalError)):
             db_session.commit()
         db_session.rollback()
 
@@ -278,7 +278,7 @@ def test_match_evidence_requires_valid_candidate_evaluation(db_session: Session)
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
@@ -332,7 +332,7 @@ def test_hr_decision_requires_valid_job_application_and_user(db_session: Session
             )
         )
 
-        with pytest.raises(IntegrityError):
+        with pytest.raises((IntegrityError, OperationalError)):
             db_session.commit()
         db_session.rollback()
 

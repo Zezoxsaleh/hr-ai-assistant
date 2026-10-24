@@ -41,9 +41,7 @@ class JobProfileService:
             raise ValidationError(f"Invalid job profile status: {status!r}.")
         if source not in VALID_SOURCES:
             raise ValidationError(f"Invalid job profile source: {source!r}.")
-        job = self._get_job(db, job_id=job_id)
-        if organization_id is not None and job.organization_id != organization_id:
-            raise ValidationError("Job does not belong to the expected organization.")
+        job = self._get_job(db, job_id=job_id, organization_id=organization_id)
 
         version_number = self._next_version_number(db, job_id=job_id)
         if make_current:
@@ -75,7 +73,7 @@ class JobProfileService:
         if profile is None:
             raise NotFoundError("JobProfile was not found.")
         if organization_id is not None and profile.job.organization_id != organization_id:
-            raise ValidationError("JobProfile does not belong to the expected organization.")
+            raise NotFoundError("JobProfile was not found.")
         return profile
 
     def list_versions(
@@ -86,9 +84,7 @@ class JobProfileService:
         organization_id: uuid.UUID | None = None,
     ) -> list[JobProfile]:
         """Return all profile versions for a job ordered by version number."""
-        job = self._get_job(db, job_id=job_id)
-        if organization_id is not None and job.organization_id != organization_id:
-            raise ValidationError("Job does not belong to the expected organization.")
+        job = self._get_job(db, job_id=job_id, organization_id=organization_id)
         return list(
             db.scalars(
                 select(JobProfile)
@@ -112,7 +108,7 @@ class JobProfileService:
         if user is None:
             raise NotFoundError("Approving user was not found.")
         if user.organization_id != profile.job.organization_id:
-            raise ValidationError("Approving user must belong to the job organization.")
+            raise NotFoundError("JobProfile was not found.")
         if profile.status == "approved":
             raise InvalidStateError("JobProfile is already approved.")
 
@@ -121,6 +117,24 @@ class JobProfileService:
         profile.approved_by_user_id = approved_by_user_id
         profile.approved_at = approved_at or datetime.now(UTC)
         profile.is_current = True
+
+        from app.services.audit_service import AuditService
+
+        AuditService().log_event(
+            db,
+            action="job_profile.approved",
+            entity_type="job_profile",
+            organization_id=profile.job.organization_id,
+            actor_user_id=approved_by_user_id,
+            entity_id=profile.id,
+            metadata={
+                "job_id": str(profile.job_id),
+                "version_number": profile.version_number,
+                "status": profile.status,
+            },
+            flush=False,
+        )
+
         db.flush()
         return profile
 
@@ -138,9 +152,13 @@ class JobProfileService:
             return current_versions[-1]
         return versions[-1] if versions else None
 
-    def _get_job(self, db: Session, *, job_id: uuid.UUID) -> Job:
+    def _get_job(
+        self, db: Session, *, job_id: uuid.UUID, organization_id: uuid.UUID | None = None
+    ) -> Job:
         job = db.get(Job, job_id)
         if job is None:
+            raise NotFoundError("Job was not found.")
+        if organization_id is not None and job.organization_id != organization_id:
             raise NotFoundError("Job was not found.")
         return job
 

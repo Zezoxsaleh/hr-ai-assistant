@@ -1,4 +1,5 @@
 import apiClient from "./apiClient";
+import { parseScore } from "../utils/score";
 
 // Matching-results service backed entirely by the real backend.
 //
@@ -24,8 +25,8 @@ export async function getRanking() {
       text: item.text || item.requirement_key || "",
     }));
   return rows.map((row) => {
-    const rawScore = Number(row.score);
-    const score = Number.isFinite(rawScore) ? Math.round(rawScore) : null;
+    const rawScore = parseScore(row.score);
+    const score = rawScore;
     return {
       id: row.id,
       applicationId: row.id,
@@ -42,12 +43,11 @@ export async function getRanking() {
   });
 }
 
-// Records an HR pipeline decision for an application via the real decisions
-// endpoint (advance / hold / reject). This is the backed version of the
-// original "Shortlist / Hold / Reject" row actions.
-export async function recordPipelineDecision(applicationId, decision) {
-  const { data } = await apiClient.post(`/job-applications/${applicationId}/decisions`, {
-    decision,
-  });
+export async function recordPipelineDecision(applicationId, decision, reason = null) {
+  const payload = { decision };
+  if (reason) {
+    payload.reason = reason;
+  }
+  const { data } = await apiClient.post(`/job-applications/${applicationId}/decisions`, payload);
   return data;
 }

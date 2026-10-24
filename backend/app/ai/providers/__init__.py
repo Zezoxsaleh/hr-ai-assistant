@@ -1,7 +1,8 @@
 """Provider implementations.
 
-Phase 3.3 ships the deterministic ``FakeAIProvider``; ``SoalProvider`` adds a
-real Soal.help adapter via the OpenAI SDK, selected through ``get_provider``.
+``OllamaCloudProvider`` is the default live adapter; ``SoalProvider`` remains
+available as an alternative, and ``FakeAIProvider`` supports offline tests.
+Provider selection is handled through ``get_provider``.
 """
 
 from app.ai.providers.base import (
@@ -10,6 +11,7 @@ from app.ai.providers.base import (
     TextGenerationRequest,
 )
 from app.ai.providers.errors import (
+    ProviderConfigurationError,
     ProviderError,
     ProviderInvalidRequestError,
     ProviderRateLimitError,
@@ -19,13 +21,16 @@ from app.ai.providers.errors import (
 )
 from app.ai.providers.factory import get_provider
 from app.ai.providers.fake import FakeAIProvider
+from app.ai.providers.ollama_cloud import OllamaCloudProvider
 from app.ai.providers.soal import SoalProvider
 
 __all__ = [
     "AIProvider",
     "FakeAIProvider",
+    "OllamaCloudProvider",
     "SoalProvider",
     "ProviderError",
+    "ProviderConfigurationError",
     "ProviderInvalidRequestError",
     "ProviderRateLimitError",
     "ProviderTimeoutError",

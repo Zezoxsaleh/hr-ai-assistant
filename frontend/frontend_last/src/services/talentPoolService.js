@@ -1,4 +1,5 @@
 import apiClient from "./apiClient";
+import { parseScore } from "../utils/score";
 
 // Talent-pool service. Contract: src/types/api/candidate.js (TalentPoolRowResponse).
 // Pool rows come from the org-wide aggregation endpoint:
@@ -13,7 +14,7 @@ export async function getTalentPool() {
 }
 
 function mapBackendRow(row) {
-  const rawScore = row.score === null || row.score === undefined ? null : Number(row.score);
+  const rawScore = parseScore(row.score);
   return {
     id: row.application_id,
     applicationId: row.application_id,
@@ -24,9 +25,10 @@ function mapBackendRow(row) {
     phone: row.phone || "",
     jobTitle: row.job_title || "—",
     group: row.group || "",
-    score: rawScore !== null && Number.isFinite(rawScore) ? Math.round(rawScore) : null,
+    score: rawScore,
     status: row.status || "",
     decision: row.decision || "",
     decisionCreatedAt: row.decision_created_at || null,
+    skills: Array.isArray(row.skills) ? row.skills.filter((skill) => typeof skill === "string") : [],
   };
 }

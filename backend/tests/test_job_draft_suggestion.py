@@ -120,7 +120,7 @@ class TestSuggestJobForm:
             "/api/v1/jobs/ai/suggest-form",
             json={"raw_description": "Backend Engineer"},
         )
-        assert resp.status_code == 422
+        assert resp.status_code in (401, 422)
 
     def test_rejects_empty_description(self, client: httpx.Client, db_session: Session) -> None:
         organization, user = seed_org_user(db_session)
@@ -301,7 +301,7 @@ class TestExtractJobProfile:
         self, client: httpx.Client, db_session: Session
     ) -> None:
         resp = client.post(f"/api/v1/jobs/{uuid.uuid4()}/extract-profile")
-        assert resp.status_code == 422
+        assert resp.status_code in (401, 422)
 
 
 # ---------------------------------------------------------------------------

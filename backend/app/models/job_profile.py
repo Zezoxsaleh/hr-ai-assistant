@@ -50,6 +50,7 @@ class JobProfile(Base):
             "job_id",
             unique=True,
             postgresql_where=text("is_current = true"),
+            sqlite_where=text("is_current = 1"),
         ),
     )
 

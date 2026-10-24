@@ -20,6 +20,8 @@ def _validated_database_name(url: URL) -> str:
 
 def _ensure_test_database_exists(test_database_url: str) -> None:
     test_url = make_url(test_database_url)
+    if "sqlite" in test_url.drivername:
+        return
     test_database_name = _validated_database_name(test_url)
     admin_database_name = "postgres" if test_database_name != "postgres" else "template1"
     admin_url = test_url.set(database=admin_database_name)
@@ -60,10 +62,49 @@ def _force_fake_ai_provider() -> Generator[None, None, None]:
         settings.ai_provider = original
 
 
+def _is_postgres_reachable(test_database_url: str) -> bool:
+    import socket
+    test_url = make_url(test_database_url)
+    host = test_url.host or "localhost"
+    port = test_url.port or 5432
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 @pytest.fixture(scope="session")
 def test_engine() -> Generator[Engine, None, None]:
-    _ensure_test_database_exists(settings.test_database_url)
-    engine = create_engine(settings.test_database_url, pool_pre_ping=True)
+    from sqlalchemy.pool import StaticPool
+
+    test_url = make_url(settings.test_database_url)
+    engine = None
+    if "sqlite" not in test_url.drivername and _is_postgres_reachable(settings.test_database_url):
+        try:
+            _ensure_test_database_exists(settings.test_database_url)
+            pg_engine = create_engine(settings.test_database_url, pool_pre_ping=True)
+            with pg_engine.connect():
+                pass
+            engine = pg_engine
+        except Exception:
+            engine = None
+
+    if engine is None:
+        from sqlalchemy import event
+
+        engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 

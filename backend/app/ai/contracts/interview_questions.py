@@ -18,13 +18,40 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ai.contracts.match_evidence import is_requirement_key
-from app.ai.contracts.schema import AI_CONTRACT_SCHEMA_VERSION, SchemaVersion
+from app.ai.contracts.schema import INTERVIEW_QUESTION_SCHEMA_VERSION, SchemaVersion
 
 QuestionCategory = Literal["technical", "behavioral", "situational", "candidate_specific"]
+QuestionEvidenceBasis = Literal[
+    "verified_cv_evidence",
+    "verification_question",
+    "job_requirement",
+]
+
+
+class InterviewQuestionReviewGuide(BaseModel):
+    """Consistent interviewer guidance for a question, grounded in its source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: str = Field(min_length=1, max_length=1000)
+    evidence_basis: QuestionEvidenceBasis
+    source_quote: str | None = Field(default=None, max_length=2000)
+    interviewer_looks_for: str = Field(min_length=1, max_length=1000)
+    evaluation_rubric: list[str] = Field(min_length=2, max_length=5)
+
+    @model_validator(mode="after")
+    def _validate_source_quote(self) -> InterviewQuestionReviewGuide:
+        if self.evidence_basis == "verified_cv_evidence" and not self.source_quote:
+            raise ValueError("Verified CV evidence requires a source_quote.")
+        if self.evidence_basis != "verified_cv_evidence" and self.source_quote is not None:
+            raise ValueError("Only verified CV evidence may include a source_quote.")
+        if any(not item.strip() for item in self.evaluation_rubric):
+            raise ValueError("Evaluation rubric criteria must not be empty.")
+        return self
 
 
 class InterviewQuestionOutput(BaseModel):
-    """A single AI-proposed interview question (contract schema v1.1)."""
+    """A single AI-proposed interview question (contract schema v1.2)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -32,6 +59,7 @@ class InterviewQuestionOutput(BaseModel):
     text: str = Field(min_length=1)
     topic: str | None = Field(default=None, max_length=250)
     requirement_key: str | None = None
+    review_guide: InterviewQuestionReviewGuide
 
     @model_validator(mode="after")
     def _validate_requirement_key(self) -> InterviewQuestionOutput:
@@ -41,19 +69,19 @@ class InterviewQuestionOutput(BaseModel):
 
 
 class InterviewQuestionSetOutput(BaseModel):
-    """An AI-proposed set of interview questions (contract schema v1.1).
+    """An AI-proposed set of interview questions (contract schema v1.2).
 
     ``questions`` is a flat, pre-ordered list; position is implied by list order.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: SchemaVersion = AI_CONTRACT_SCHEMA_VERSION
+    schema_version: SchemaVersion = INTERVIEW_QUESTION_SCHEMA_VERSION
     questions: list[InterviewQuestionOutput] = Field(min_length=1)
 
 
 def validate_interview_question_set(
-    data: dict, *, allowed_keys: set[str]
+    data: dict, *, allowed_keys: set[str], resume_text: str | None = None
 ) -> InterviewQuestionSetOutput:
     """Validate raw AI data into an InterviewQuestionSetOutput bound to allowed keys.
 
@@ -74,5 +102,12 @@ def validate_interview_question_set(
             raise ValidationError(
                 f"Interview question requirement_key {question.requirement_key!r} was not "
                 "among the requirement keys supplied to the AI."
+            )
+        guide = question.review_guide
+        if guide.evidence_basis == "verified_cv_evidence" and (
+            not resume_text or not guide.source_quote or guide.source_quote not in resume_text
+        ):
+            raise ValidationError(
+                "Interview question source_quote was not found verbatim in the extracted CV."
             )
     return output

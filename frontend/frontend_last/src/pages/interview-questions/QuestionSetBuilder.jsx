@@ -54,6 +54,47 @@ function blankQuestion() {
   return { category: "technical", text: "", topic: "", requirementKey: null };
 }
 
+const EVIDENCE_BASIS_LABELS = {
+  verified_cv_evidence: "Verified CV evidence",
+  verification_question: "Check this with the candidate",
+  job_requirement: "Job requirement",
+};
+
+function QuestionReviewGuide({ guide }) {
+  if (!guide) {
+    return (
+      <p className="qs-guide-legacy">
+        No structured review guidance is available for this saved question.
+      </p>
+    );
+  }
+
+  return (
+    <div className="qs-review-guide">
+      <span className="qs-guide-basis">
+        {EVIDENCE_BASIS_LABELS[guide.evidenceBasis] || "Review guidance"}
+      </span>
+      <p><strong>Purpose:</strong> {guide.purpose}</p>
+      {guide.sourceQuote && (
+        <blockquote dir="auto">
+          <strong>CV evidence:</strong> “{guide.sourceQuote}”
+        </blockquote>
+      )}
+      <p><strong>Listen for:</strong> {guide.interviewerLooksFor}</p>
+      {Array.isArray(guide.evaluationRubric) && guide.evaluationRubric.length > 0 && (
+        <div>
+          <strong>Consistent rubric</strong>
+          <ul>
+            {guide.evaluationRubric.map((criterion, index) => (
+              <li key={`${index}-${criterion}`}>{criterion}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function QuestionSetBuilder() {
   const { id: applicationId } = useParams();
   const navigate = useNavigate();
@@ -240,9 +281,9 @@ export default function QuestionSetBuilder() {
       <div className="section-head">
         <div>
           <p className="eyebrow">INTERVIEW QUESTIONS</p>
-          <h3>
+          <h2>
             Questions — {candidate?.name || "Candidate"} · {job?.title || "Job"}
-          </h3>
+          </h2>
         </div>
         <button className="primary" onClick={handleGenerate} disabled={generating}>
           {generating ? (
@@ -377,6 +418,7 @@ export default function QuestionSetBuilder() {
                         rows={2}
                         aria-label="Question text"
                       />
+                      <QuestionReviewGuide guide={question.reviewGuide} />
                     </div>
                     <button
                       type="button"
@@ -407,9 +449,12 @@ export default function QuestionSetBuilder() {
             <>
               <div className="question-list">
                 {selected.questions.map((q, index) => (
-                  <div className="question-item" key={q.id || index}>
-                    <span className="chip">{q.categoryLabel}</span>
-                    <span style={{ flex: 1 }}>{q.text}</span>
+                  <div className="question-item qs-readonly-item" key={q.id || index}>
+                    <div className="qs-readonly-question">
+                      <span className="chip">{q.categoryLabel}</span>
+                      <span style={{ flex: 1 }}>{q.text}</span>
+                    </div>
+                    <QuestionReviewGuide guide={q.reviewGuide} />
                   </div>
                 ))}
               </div>

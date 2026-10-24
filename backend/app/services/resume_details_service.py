@@ -25,6 +25,14 @@ from app.ai.contracts import (
     validate_evaluation_explanation,
     validate_match_evidence_list,
 )
+from app.services.evidence_verification_service import EvidenceVerificationService
+from app.services.text_normalization import (
+    ARABIC_STOPWORDS,
+    extract_verbatim_quote,
+    has_term_match,
+    normalize_for_matching,
+    tokenize_words,
+)
 
 # ---------------------------------------------------------------------------
 # Contact / link / structured detail extraction
@@ -63,6 +71,19 @@ _ABBR_DEGREE_FIELDS = re.compile(
 _CERT_RE = re.compile(
     r"\b(?:certified|certification|certificate|licensed|professional)\b[^.\n]{0,100}",
     re.IGNORECASE,
+)
+
+_RESUME_SECTION_RE = re.compile(
+    r"^(?:professional\s+)?(?:summary|profile|experience|employment|work\s+history|"
+    r"education|academic\s+background|certifications?(?:\s+(?:and|&)\s+licenses?)?|"
+    r"licenses?(?:\s+(?:and|&)\s+certifications?)?|skills|languages|"
+    r"projects|publications|references|awards|volunteer(?:\s+experience)?)\s*:?$",
+    re.IGNORECASE,
+)
+_CERT_SECTION_RE = re.compile(
+    r"^(?:certifications?(?:\s+(?:and|&)\s+licenses?)?|"
+    r"licenses?(?:\s+(?:and|&)\s+certifications?)?)\s*:?$",
+    re.I,
 )
 
 _YEAR_RANGE_RE = re.compile(
@@ -472,14 +493,28 @@ def extract_education(text: str | None) -> list[str]:
 
 
 def extract_certifications(text: str | None) -> list[str]:
-    """Return unique certification/license lines (up to 8)."""
+    """Extract certification lines without treating unrelated section headings as credentials."""
     results: list[str] = []
-    for match in _CERT_RE.finditer(text or ""):
-        line = " ".join(match.group(0).split())
+    lines = (text or "").splitlines()
+    has_cert_section = any(_CERT_SECTION_RE.fullmatch(" ".join(line.split())) for line in lines)
+    in_cert_section = False
+    for raw_line in lines:
+        line = " ".join(raw_line.split())
         if not line:
             continue
-        if line not in results:
-            results.append(line)
+        if _RESUME_SECTION_RE.fullmatch(line):
+            in_cert_section = bool(_CERT_SECTION_RE.fullmatch(line))
+            continue
+        if has_cert_section:
+            if not in_cert_section:
+                continue
+            candidate = line
+        else:
+            if _RESUME_SECTION_RE.fullmatch(line) or not _CERT_RE.search(line):
+                continue
+            candidate = line
+        if candidate not in results:
+            results.append(candidate)
         if len(results) >= 8:
             break
     return results
@@ -504,8 +539,12 @@ def extract_experience(text: str | None) -> list[str]:
 
 def build_skills(text: str | None) -> list[str]:
     """Return the skills found in the resume text, in dictionary relevance order."""
-    norm = _normalize(text)
-    return [skill for skill in _SKILLS if _has_phrase(norm, skill)]
+    norm = normalize_for_matching(text)
+    return [
+        skill
+        for skill in _SKILLS
+        if has_term_match(norm, skill) or _has_phrase(norm, skill)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -576,10 +615,9 @@ def _parse_year(value: str) -> int | None:
 
 
 def _significant_tokens(text: str | None) -> list[str]:
-    norm = _normalize(text)
     tokens = set()
-    for token in _WORD_RE.findall(norm):
-        if len(token) < 3 or token in _STOPWORDS:
+    for token in tokenize_words(text):
+        if len(token) < 3 or token in _STOPWORDS or token in ARABIC_STOPWORDS:
             continue
         tokens.add(token)
     return sorted(tokens)
@@ -608,13 +646,15 @@ def derive_evidence_payload(*, resume_text: str | None, requirements: Any) -> di
     the exact key set the workflow will validate against.
     """
     normalized = normalize_job_profile_requirements(_as_raw_requirements(requirements))
-    norm = _normalize(resume_text)
+    norm = normalize_for_matching(resume_text)
     allowed_keys = {requirement.key for requirement in normalized}
 
     items = []
     for requirement in normalized:
         req_tokens = _significant_tokens(requirement.text)
-        matched_terms = [token for token in req_tokens if _has_phrase(norm, token)]
+        matched_terms = [
+            token for token in req_tokens if has_term_match(norm, token) or _has_phrase(norm, token)
+        ]
         ratio = len(matched_terms) / len(req_tokens) if req_tokens else 0.0
 
         if not req_tokens:
@@ -626,15 +666,19 @@ def derive_evidence_payload(*, resume_text: str | None, requirements: Any) -> di
         else:
             evidence_type, strength = "matched", "strong"
 
-        evidence_text = (
-            _snippet_for_term(norm, matched_terms[0], limit=180) if matched_terms else ""
-        )
+        raw_quote = ""
+        if matched_terms and resume_text:
+            raw_quote = extract_verbatim_quote(resume_text, matched_terms[0], max_chars=180)
+            if not raw_quote:
+                raw_quote = _snippet_for_term(norm, matched_terms[0], limit=180)
+
         items.append(
             {
                 "evidence_type": evidence_type,
                 "requirement_ref": {"requirement_key": requirement.key},
                 "candidate_evidence": {
-                    "evidence_text": evidence_text,
+                    "quote": raw_quote,
+                    "evidence_text": raw_quote,
                     "matched_terms": matched_terms,
                     "coverage_ratio": f"{ratio:.2f}",
                 },
@@ -643,12 +687,21 @@ def derive_evidence_payload(*, resume_text: str | None, requirements: Any) -> di
                     "method": "deterministic",
                     "source": "resume_text",
                     "edge": "resume_details_service.build_match_evidence",
+                    "evidence_engine_version": "2.0",
                 },
             }
         )
 
+    # Pass through EvidenceVerificationService boundary
+    verifier = EvidenceVerificationService()
+    verified_items = verifier.verify_evidence_items(
+        resume_text=resume_text,
+        evidence_items=items,
+        requirements=normalized,
+    )
+
     validated = validate_match_evidence_list(
-        {"evidence_items": items},
+        {"evidence_items": verified_items},
         allowed_keys=allowed_keys,
     )
     assert isinstance(validated, MatchEvidenceListOutput)

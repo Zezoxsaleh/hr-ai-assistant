@@ -1,7 +1,7 @@
 import React from "react";
 import { CheckCircle2, Clock3, XCircle } from "lucide-react";
 
-// UI-only shared pipeline-decision buttons (Advance / Hold / Reject).
+// UI-only shared pipeline-decision buttons (Advance / Hold / Reject) (UI-01 accessible).
 //
 // Renders the actions and calls `onDecision(decision)` with the decision
 // vocabulary ("advance" | "hold" | "reject"). It performs no API calls and
@@ -17,7 +17,7 @@ const ACTIONS = [
 export default function PipelineActions({ currentStatus, onDecision, size = "normal", disabled }) {
   const small = size === "small";
   return (
-    <div className="pipeline-actions">
+    <div className="pipeline-actions" role="group" aria-label="Pipeline decisions">
       {ACTIONS.map(({ decision, label, icon: Icon, className }) => (
         <button
           key={decision}
@@ -26,8 +26,10 @@ export default function PipelineActions({ currentStatus, onDecision, size = "nor
           onClick={() => onDecision(decision)}
           disabled={disabled}
           title={label}
+          aria-label={label}
+          aria-pressed={currentStatus === decision}
         >
-          <Icon size={small ? 13 : 15} /> {!small && label}
+          <Icon size={small ? 13 : 15} aria-hidden="true" /> {!small && label}
         </button>
       ))}
     </div>

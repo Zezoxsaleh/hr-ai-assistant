@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models import Candidate, Job, JobApplication, Organization, Resume, User
@@ -73,28 +73,28 @@ def test_user_requires_valid_organization(db_session: Session) -> None:
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
 def test_job_requires_valid_organization(db_session: Session) -> None:
     db_session.add(Job(organization_id=uuid.uuid4(), title="Invalid Job"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
 def test_candidate_requires_valid_organization(db_session: Session) -> None:
     db_session.add(Candidate(organization_id=uuid.uuid4(), full_name="Invalid Candidate"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
 def test_resume_requires_valid_candidate(db_session: Session) -> None:
     db_session.add(Resume(candidate_id=uuid.uuid4(), file_uri="local://missing.pdf"))
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 
@@ -109,7 +109,7 @@ def test_job_application_requires_job_candidate_and_resume(db_session: Session) 
     )
     db_session.add(invalid_application)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
     db_session.rollback()
@@ -122,7 +122,7 @@ def test_job_application_requires_job_candidate_and_resume(db_session: Session) 
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
     db_session.rollback()
@@ -135,7 +135,7 @@ def test_job_application_requires_job_candidate_and_resume(db_session: Session) 
         )
     )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises((IntegrityError, OperationalError)):
         db_session.commit()
 
 

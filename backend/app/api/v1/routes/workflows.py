@@ -115,93 +115,111 @@ def screen_candidates(
             "Extract a profile and approve it in HR review before screening candidates."
         )
 
+    from app.services.upload_stream_service import read_batch_bounded
+
+    # Bounded batch reading enforcing max file count, per-file limits, and total batch size
+    batch_payloads = read_batch_bounded(
+        files,
+        max_files=settings.max_batch_files,
+        max_file_bytes=settings.max_upload_bytes,
+        max_batch_bytes=settings.max_batch_bytes,
+    )
+
     candidate_service = CandidateService()
     resume_service = ResumeService()
     application_service = JobApplicationService()
     storage = LocalFileSystemStorage(settings.storage_root_dir)
     screened: list[ScreenedCandidateResponse] = []
+    created_file_uris: list[str] = []
 
-    for file in files:
-        if not (file.filename or "").strip():
-            raise ValidationError("Every uploaded CV needs a filename.")
-        file_bytes = file.file.read()
-        if not file_bytes:
-            raise ValidationError(f"Uploaded file {file.filename!r} is empty.")
+    try:
+        with db.begin_nested():
+            for payload in batch_payloads:
+                candidate = candidate_service.create(
+                    db,
+                    organization_id=ctx.organization_id,
+                    full_name=_candidate_name_from_filename(payload.filename),
+                )
+                resume = resume_service.create_from_upload(
+                    db,
+                    candidate_id=candidate.id,
+                    organization_id=ctx.organization_id,
+                    filename=payload.filename,
+                    content_type=payload.content_type,
+                    file_bytes=payload.data,
+                    max_upload_bytes=settings.max_upload_bytes,
+                    storage=storage,
+                    checksum=payload.checksum,
+                )
+                created_file_uris.append(resume.file_uri)
 
-        candidate = candidate_service.create(
-            db,
-            organization_id=ctx.organization_id,
-            full_name=_candidate_name_from_filename(file.filename),
-        )
-        resume = resume_service.create_from_upload(
-            db,
-            candidate_id=candidate.id,
-            organization_id=ctx.organization_id,
-            filename=file.filename,
-            content_type=file.content_type or "",
-            file_bytes=file_bytes,
-            max_upload_bytes=settings.max_upload_bytes,
-            storage=storage,
-        )
-        profile_payload, evidence_payload, explanation_payload = derive_screening_payloads(
-            full_name=candidate.full_name,
-            job_title=job.title,
-            resume_text=resume.extracted_text,
-            requirements=(
-                approved_profile.profile_data.get("requirements")
-                if approved_profile is not None
-                else []
-            ),
-        )
-        profile_extractor = get_provider(
-            settings,
-            provider="fake",
-            model="fake-model",
-            structured_payload=profile_payload,
-        )
-        CandidateProfileExtractionWorkflow(profile_extractor).run(
-            db,
-            resume_id=resume.id,
-            organization_id=ctx.organization_id,
-            resume_text=resume.extracted_text,
-        )
-        application = application_service.create(
-            db,
-            organization_id=ctx.organization_id,
-            job_id=job_uuid,
-            candidate_id=candidate.id,
-            resume_id=resume.id,
-        )
-        result = CandidateEvaluationWorkflow(
-            evidence_provider=get_provider(
-                settings,
-                provider="fake",
-                model="fake-evidence-model",
-                structured_payload=evidence_payload,
-            ),
-            explanation_provider=get_provider(
-                settings,
-                provider="fake",
-                model="fake-explanation-model",
-                structured_payload=explanation_payload,
-            ),
-        ).run(
-            db,
-            job_application_id=application.id,
-            organization_id=ctx.organization_id,
-        )
-        evaluation = db.get(CandidateEvaluation, result.evaluation_id)
-        screened.append(
-            ScreenedCandidateResponse(
-                candidate_id=candidate.id,
-                resume_id=resume.id,
-                application_id=application.id,
-                evaluation_id=result.evaluation_id,
-                score=str(evaluation.score) if evaluation is not None else None,
-            )
-        )
+                profile_payload, evidence_payload, explanation_payload = derive_screening_payloads(
+                    full_name=candidate.full_name,
+                    job_title=job.title,
+                    resume_text=resume.extracted_text,
+                    requirements=(
+                        approved_profile.profile_data.get("requirements")
+                        if approved_profile is not None
+                        else []
+                    ),
+                )
+                profile_extractor = get_provider(
+                    settings,
+                    provider="fake",
+                    model="fake-model",
+                    structured_payload=profile_payload,
+                )
+                CandidateProfileExtractionWorkflow(profile_extractor).run(
+                    db,
+                    resume_id=resume.id,
+                    organization_id=ctx.organization_id,
+                    resume_text=resume.extracted_text,
+                )
+                application = application_service.create(
+                    db,
+                    organization_id=ctx.organization_id,
+                    job_id=job_uuid,
+                    candidate_id=candidate.id,
+                    resume_id=resume.id,
+                )
+                result = CandidateEvaluationWorkflow(
+                    evidence_provider=get_provider(
+                        settings,
+                        provider="fake",
+                        model="fake-evidence-model",
+                        structured_payload=evidence_payload,
+                    ),
+                    explanation_provider=get_provider(
+                        settings,
+                        provider="fake",
+                        model="fake-explanation-model",
+                        structured_payload=explanation_payload,
+                    ),
+                ).run(
+                    db,
+                    job_application_id=application.id,
+                    organization_id=ctx.organization_id,
+                )
+                evaluation = db.get(CandidateEvaluation, result.evaluation_id)
+                screened.append(
+                    ScreenedCandidateResponse(
+                        candidate_id=candidate.id,
+                        resume_id=resume.id,
+                        application_id=application.id,
+                        evaluation_id=result.evaluation_id,
+                        score=str(evaluation.score) if evaluation is not None else None,
+                    )
+                )
 
-    db.commit()
+        db.commit()
+    except Exception:
+        for uri in created_file_uris:
+            try:
+                storage.delete(file_uri=uri)
+            except Exception:
+                pass
+        raise
+
     return {
         "job_id": job_uuid,
         "job_title": job.title,
@@ -401,10 +419,8 @@ def _run_candidate_evaluation(
     from app.services.resume_service import ResumeService
 
     application = db.get(JobApplication, application_id)
-    if application is None:
+    if application is None or application.organization_id != organization_id:
         raise NotFoundError("JobApplication was not found.")
-    if application.organization_id != organization_id:
-        raise ValidationError("JobApplication belongs to a different organization.")
     job = JobService().get(db, job_id=application.job_id, organization_id=organization_id)
     approved_profile = None
     for profile in JobProfileService().list_versions(

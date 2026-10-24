@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { MessageCircle, Plus, RotateCw, Send, Sparkles, X } from "lucide-react";
+import { Plus, RotateCw, Send, X } from "lucide-react";
+import HeraAssistantMark from "../common/HeraAssistantMark";
 import {
   createThread,
   getThread,
@@ -49,7 +50,7 @@ function linksFromResults(toolResults) {
   return links.slice(0, 3);
 }
 
-export default function HERAChatbot() {
+export default function HERAChatbot({ inline = false }) {
   const [open, setOpen] = useState(false);
   const [threads, setThreads] = useState([]);
   const [activeThreadId, setActiveThreadId] = useState(null);
@@ -165,12 +166,12 @@ export default function HERAChatbot() {
   };
 
   return (
-    <div className="karen-widget">
+    <div className={`karen-widget${inline ? " karen-widget-inline" : ""}`}>
       {open && (
-        <div className="karen-panel">
+        <div className="karen-panel" id="hera-assistant-panel" aria-label="HERA assistant">
           <div className="karen-header">
             <div className="karen-header-title">
-              <Sparkles size={16} />
+              <HeraAssistantMark size={23} />
               <strong>HERA</strong>
               <span>AI Assistant</span>
             </div>
@@ -272,9 +273,13 @@ export default function HERAChatbot() {
         type="button"
         className="karen-fab"
         onClick={toggleOpen}
-        aria-label={open ? "Close HERA chat" : "Open HERA chat"}
+        aria-label={open ? "Close HERA assistant" : "Open HERA assistant"}
+        aria-expanded={open}
+        aria-controls={open ? "hera-assistant-panel" : undefined}
+        data-tooltip="Ask HERA about jobs, candidates, interviews, or AI activity"
+        title={open ? "Close HERA assistant" : "Ask HERA about jobs, candidates, interviews, or AI activity"}
       >
-        {open ? <X size={22} /> : <MessageCircle size={22} />}
+        {open ? <X size={21} /> : <HeraAssistantMark size={34} />}
       </button>
     </div>
   );

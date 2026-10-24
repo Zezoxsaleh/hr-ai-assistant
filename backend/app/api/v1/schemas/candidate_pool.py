@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class JobCandidateSummary(BaseModel):
@@ -44,5 +44,6 @@ class TalentPoolRowResponse(BaseModel):
     status: str
     score: str | None = None
     group: str
+    skills: list[str] = Field(default_factory=list)
     decision: str | None = None
     decision_created_at: datetime | None = None

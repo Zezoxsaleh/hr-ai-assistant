@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { RefreshCw, KeyRound, CheckCircle2, XCircle, Trash2 } from "lucide-react";
+import { RefreshCw, KeyRound, CheckCircle2, XCircle } from "lucide-react";
 import LoadingSpinner from "../../components/common/LoadingSpinner";
 import ErrorState from "../../components/common/ErrorState";
 import {
   getAISettings,
-  setApiKey,
-  clearApiKey,
   verifyApiKey,
 } from "../../services/aiSettingsService";
 import AIActivityList from "../ai-activity/AIActivityList";
@@ -37,51 +35,20 @@ export default function AISettings() {
 
   useEffect(load, []);
 
-  const save = async () => {
-    if (!apiKey.trim()) {
-      setFormError("Paste a Soal API key first.");
-      return;
-    }
-    setBusy("save");
-    setFormError("");
-    setNotice("");
-    setVerifyResult(null);
-    try {
-      const next = await setApiKey(apiKey.trim());
-      setSettings(next);
-      setApiKeyField("");
-      setNotice("API key saved for this server session. AI calls will now use it.");
-    } catch (err) {
-      setFormError(err?.response?.data?.detail || "Failed to save the API key.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const remove = async () => {
-    setBusy("clear");
-    setFormError("");
-    setNotice("");
-    setVerifyResult(null);
-    try {
-      const next = await clearApiKey();
-      setSettings(next);
-      setNotice("Runtime API key cleared. The server default applies again.");
-    } catch (err) {
-      setFormError(err?.response?.data?.detail || "Failed to clear the API key.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const verify = async () => {
+  const verify = async (useProbe = false) => {
     setBusy("verify");
     setFormError("");
+    setNotice("");
     setVerifyResult(null);
     try {
-      const result = await verifyApiKey(apiKey.trim() || undefined);
+      const keyToTest = useProbe && apiKey.trim() ? apiKey.trim() : undefined;
+      const result = await verifyApiKey(keyToTest);
       setVerifyResult(result);
-      if (result.ok) setNotice("Verification succeeded.");
+      if (result.ok) {
+        setNotice(result.message || "AI provider connection verified successfully.");
+      } else {
+        setFormError(result.message || "AI provider verification failed.");
+      }
     } catch (err) {
       setFormError(err?.response?.data?.detail || "Verification request failed.");
     } finally {
@@ -94,7 +61,6 @@ export default function AISettings() {
     return <ErrorState message="Unable to load AI settings. Try again." onRetry={load} />;
 
   const soalActive = settings.provider === "soal";
-  const runtimeActive = settings.api_key_source === "runtime";
 
   return (
     <section>
@@ -111,11 +77,10 @@ export default function AISettings() {
         </div>
 
         <div className="dev-note">
-          <strong>Soal</strong>
+          <strong>Environment-Managed Configuration</strong>
           <span>
-            The backend calls Soal with the API key configured in its environment. If that
-            key hits its free-tier rate limit, you can supply another one here — it applies
-            to this server session without a restart and is never stored in the database.
+            AI provider credentials are managed securely by system operators via server environment variables (.env).
+            Runtime key modification is disabled to ensure tenant isolation and prevent cross-organization configuration changes.
           </span>
         </div>
 
@@ -150,8 +115,7 @@ export default function AISettings() {
 
         {!soalActive && (
           <p className="muted-note">
-            Soal is not enabled yet — add an API key below to switch the backend to live AI
-            screening without a restart.
+            Soal is not currently configured as the active provider. System operators can set SOAL_API_KEY in the server environment.
           </p>
         )}
 
@@ -160,13 +124,13 @@ export default function AISettings() {
         )}
 
         <label>
-Soal API key
+          Test / Probe API key (Optional)
           <div className="input-with-icon">
             <KeyRound size={17} />
             <input
               name="apiKey"
               type="password"
-              placeholder="Paste a Soal API key (not stored in the database)"
+              placeholder="Enter a key to test connectivity (probe only, not saved)"
               value={apiKey}
               onChange={(e) => setApiKeyField(e.target.value)}
               autoComplete="off"
@@ -175,15 +139,12 @@ Soal API key
         </label>
 
         <div className="btn-row">
-          <button className="btn btn-primary" onClick={save} disabled={busy === "save"}>
-            {busy === "save" ? "Saving..." : "Save API key"}
+          <button className="btn btn-primary" onClick={() => verify(false)} disabled={busy === "verify"}>
+            <CheckCircle2 size={16} /> {busy === "verify" ? "Verifying..." : "Verify Active Provider"}
           </button>
-          <button className="btn btn-secondary" onClick={verify} disabled={busy === "verify"}>
-            <CheckCircle2 size={16} /> {busy === "verify" ? "Verifying..." : "Verify key"}
-          </button>
-          {runtimeActive && (
-            <button className="btn btn-secondary" onClick={remove} disabled={busy === "clear"}>
-              <Trash2 size={16} /> Clear runtime key
+          {apiKey.trim() && (
+            <button className="btn btn-secondary" onClick={() => verify(true)} disabled={busy === "verify"}>
+              <CheckCircle2 size={16} /> Test Probe Key
             </button>
           )}
         </div>
