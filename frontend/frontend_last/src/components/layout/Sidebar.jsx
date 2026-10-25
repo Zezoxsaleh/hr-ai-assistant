@@ -11,7 +11,6 @@ import {
   Star,
   BarChart3,
   Settings,
-  Activity,
 } from "lucide-react";
 import BrandIcon from "../common/BrandIcon";
 import { BRAND } from "../../config/brand";
@@ -37,7 +36,6 @@ const SECONDARY_NAV_ITEMS = [
 // Administrator-only configuration and observability
 const ADMIN_NAV_ITEMS = [
   { to: "/settings", label: "Settings", icon: Settings },
-  { to: "/ai-activity", label: "AI Activity", icon: Activity },
 ];
 
 export default function Sidebar() {
